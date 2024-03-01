@@ -24,7 +24,7 @@
 // IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-use jsonrpsee_types::SubscriptionId;
+use jsonrpsee_types::{Id, SubscriptionId};
 use serde::Serialize;
 use serde_json::value::RawValue;
 
@@ -149,4 +149,10 @@ impl<T: IdProvider + ?Sized> IdProvider for Box<T> {
 	fn next_id(&self) -> SubscriptionId<'static> {
 		(**self).next_id()
 	}
+}
+
+/// Trait describing how to convert an Id
+pub trait IdKind: Default + Clone + Send + Sync {
+	/// Convert the ID
+	fn into_id(&self, current_id: u64) -> Id<'static>;
 }

@@ -45,8 +45,9 @@ pub use jsonrpsee_types as types;
 
 use jsonrpsee_client_transport::ws::{AsyncRead, AsyncWrite, WsTransportClientBuilder};
 use jsonrpsee_core::client::{
-	CertificateStore, ClientBuilder, Error, IdKind, MaybeSend, TransportReceiverT, TransportSenderT,
+	CertificateStore, ClientBuilder, Error, MaybeSend, StringOrNumberId, TransportReceiverT, TransportSenderT,
 };
+use jsonrpsee_core::traits;
 use jsonrpsee_core::TEN_MB_SIZE_BYTES;
 use std::time::Duration;
 use url::Url;
@@ -77,7 +78,7 @@ use url::Url;
 ///
 /// ```
 #[derive(Clone, Debug)]
-pub struct WsClientBuilder {
+pub struct WsClientBuilder<IdKind = StringOrNumberId> {
 	certificate_store: CertificateStore,
 	max_request_size: u32,
 	max_response_size: u32,
@@ -106,14 +107,14 @@ impl Default for WsClientBuilder {
 			max_concurrent_requests: 256,
 			max_buffer_capacity_per_subscription: 1024,
 			max_redirections: 5,
-			id_kind: IdKind::Number,
+			id_kind: StringOrNumberId::Number,
 			max_log_length: 4096,
 			tcp_no_delay: true,
 		}
 	}
 }
 
-impl WsClientBuilder {
+impl<IdKind> WsClientBuilder<IdKind> {
 	/// Create a new WebSocket client builder.
 	pub fn new() -> WsClientBuilder {
 		WsClientBuilder::default()
@@ -234,10 +235,11 @@ impl WsClientBuilder {
 	/// ## Panics
 	///
 	/// Panics if being called outside of `tokio` runtime context.
-	pub fn build_with_transport<S, R>(self, sender: S, receiver: R) -> WsClient
+	pub fn build_with_transport<S, R>(self, sender: S, receiver: R) -> WsClient<IdKind>
 	where
 		S: TransportSenderT + Send,
 		R: TransportReceiverT + Send,
+		IdKind: traits::IdKind,
 	{
 		let Self {
 			max_concurrent_requests,
@@ -270,9 +272,10 @@ impl WsClientBuilder {
 	/// ## Panics
 	///
 	/// Panics if being called outside of `tokio` runtime context.
-	pub async fn build_with_stream<T>(self, url: impl AsRef<str>, data_stream: T) -> Result<WsClient, Error>
+	pub async fn build_with_stream<T>(self, url: impl AsRef<str>, data_stream: T) -> Result<WsClient<IdKind>, Error>
 	where
 		T: AsyncRead + AsyncWrite + Unpin + MaybeSend + 'static,
+		IdKind: traits::IdKind,
 	{
 		let transport_builder = WsTransportClientBuilder {
 			certificate_store: self.certificate_store,
@@ -298,7 +301,10 @@ impl WsClientBuilder {
 	/// ## Panics
 	///
 	/// Panics if being called outside of `tokio` runtime context.
-	pub async fn build(self, url: impl AsRef<str>) -> Result<WsClient, Error> {
+	pub async fn build(self, url: impl AsRef<str>) -> Result<WsClient<IdKind>, Error>
+	where
+		IdKind: traits::IdKind,
+	{
 		let transport_builder = WsTransportClientBuilder {
 			certificate_store: self.certificate_store,
 			connection_timeout: self.connection_timeout,

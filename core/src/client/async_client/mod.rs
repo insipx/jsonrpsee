@@ -39,7 +39,7 @@ use crate::client::{
 use crate::error::RegisterMethodError;
 use crate::params::{BatchRequestBuilder, EmptyBatchRequest};
 use crate::tracing::client::{rx_log_from_json, tx_log_from_str};
-use crate::traits::ToRpcParams;
+use crate::traits::{IdKind, ToRpcParams};
 use crate::JsonRawValue;
 use std::borrow::Cow as StdCow;
 
@@ -66,7 +66,7 @@ use tracing::instrument;
 
 use self::utils::{InactivityCheck, IntervalStream};
 
-use super::{generate_batch_id_range, FrontToBack, IdKind, RequestIdManager};
+use super::{generate_batch_id_range, FrontToBack, RequestIdManager};
 
 const LOG_TARGET: &str = "jsonrpsee-client";
 
@@ -205,23 +205,23 @@ enum ReadErrorOnce {
 
 /// Builder for [`Client`].
 #[derive(Debug, Copy, Clone)]
-pub struct ClientBuilder {
+pub struct ClientBuilder<Id> {
 	request_timeout: Duration,
 	max_concurrent_requests: usize,
 	max_buffer_capacity_per_subscription: usize,
-	id_kind: IdKind,
+	id_kind: Id,
 	max_log_length: u32,
 	ping_config: Option<PingConfig>,
 	tcp_no_delay: bool,
 }
 
-impl Default for ClientBuilder {
+impl<Id: Default> Default for ClientBuilder<Id> {
 	fn default() -> Self {
 		Self {
 			request_timeout: Duration::from_secs(60),
 			max_concurrent_requests: 256,
 			max_buffer_capacity_per_subscription: 1024,
-			id_kind: IdKind::Number,
+			id_kind: Id::default(),
 			max_log_length: 4096,
 			ping_config: None,
 			tcp_no_delay: true,
@@ -229,9 +229,12 @@ impl Default for ClientBuilder {
 	}
 }
 
-impl ClientBuilder {
+impl<Id> ClientBuilder<Id>
+where
+	Id: IdKind,
+{
 	/// Create a builder for the client.
-	pub fn new() -> ClientBuilder {
+	pub fn new() -> ClientBuilder<Id> {
 		ClientBuilder::default()
 	}
 
@@ -263,17 +266,17 @@ impl ClientBuilder {
 		self
 	}
 
-	/// Configure the data type of the request object ID (default is number).
-	pub fn id_format(mut self, id_kind: IdKind) -> Self {
-		self.id_kind = id_kind;
-		self
-	}
-
 	/// Set maximum length for logging calls and responses.
 	///
 	/// Logs bigger than this limit will be truncated.
 	pub fn set_max_logging_length(mut self, max: u32) -> Self {
 		self.max_log_length = max;
+		self
+	}
+
+	/// Configure the data type of the request object ID (default is number).
+	pub fn id_format(mut self, id_kind: Id) -> Self {
+		self.id_kind = id_kind;
 		self
 	}
 
@@ -312,7 +315,7 @@ impl ClientBuilder {
 	/// Panics if called outside of `tokio` runtime context.
 	#[cfg(feature = "async-client")]
 	#[cfg_attr(docsrs, doc(cfg(feature = "async-client")))]
-	pub fn build_with_tokio<S, R>(self, sender: S, receiver: R) -> Client
+	pub fn build_with_tokio<S, R>(self, sender: S, receiver: R) -> Client<Id>
 	where
 		S: TransportSenderT + Send,
 		R: TransportReceiverT + Send,
@@ -439,14 +442,14 @@ impl ClientBuilder {
 
 /// Generic asynchronous client.
 #[derive(Debug)]
-pub struct Client {
+pub struct Client<Id> {
 	/// Channel to send requests to the background task.
 	to_back: mpsc::Sender<FrontToBack>,
 	error: ErrorFromBack,
 	/// Request timeout. Defaults to 60sec.
 	request_timeout: Duration,
 	/// Request ID manager.
-	id_manager: RequestIdManager,
+	id_manager: RequestIdManager<Id>,
 	/// Max length for logging for requests and responses.
 	///
 	/// Entries bigger than this limit will be truncated.
@@ -455,9 +458,9 @@ pub struct Client {
 	on_exit: Option<oneshot::Sender<()>>,
 }
 
-impl Client {
+impl<Id: IdKind> Client<Id> {
 	/// Create a builder for the server.
-	pub fn builder() -> ClientBuilder {
+	pub fn builder() -> ClientBuilder<Id> {
 		ClientBuilder::new()
 	}
 
@@ -490,7 +493,7 @@ impl Client {
 	}
 }
 
-impl Drop for Client {
+impl<Id> Drop for Client<Id> {
 	fn drop(&mut self) {
 		if let Some(e) = self.on_exit.take() {
 			let _ = e.send(());
@@ -499,7 +502,7 @@ impl Drop for Client {
 }
 
 #[async_trait]
-impl ClientT for Client {
+impl<Id: IdKind> ClientT for Client<Id> {
 	#[instrument(name = "notification", skip(self, params), level = "trace")]
 	async fn notification<Params>(&self, method: &str, params: Params) -> Result<(), Error>
 	where
@@ -628,7 +631,7 @@ impl ClientT for Client {
 }
 
 #[async_trait]
-impl SubscriptionClientT for Client {
+impl<Id: IdKind> SubscriptionClientT for Client<Id> {
 	/// Send a subscription request to the server.
 	///
 	/// The `subscribe_method` and `params` are used to ask for the subscription towards the

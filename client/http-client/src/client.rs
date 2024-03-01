@@ -37,11 +37,11 @@ use hyper::body::HttpBody;
 use hyper::http::HeaderMap;
 use hyper::Body;
 use jsonrpsee_core::client::{
-	generate_batch_id_range, BatchResponse, CertificateStore, ClientT, Error, IdKind, RequestIdManager, Subscription,
-	SubscriptionClientT,
+	generate_batch_id_range, BatchResponse, CertificateStore, ClientT, Error, RequestIdManager, StringOrNumberId,
+	Subscription, SubscriptionClientT,
 };
 use jsonrpsee_core::params::BatchRequestBuilder;
-use jsonrpsee_core::traits::ToRpcParams;
+use jsonrpsee_core::traits::{self, IdKind as _, ToRpcParams};
 use jsonrpsee_core::{JsonRawValue, TEN_MB_SIZE_BYTES};
 use jsonrpsee_types::{ErrorObject, InvalidRequestId, ResponseSuccess, TwoPointZero};
 use serde::de::DeserializeOwned;
@@ -73,7 +73,7 @@ use tracing::instrument;
 /// }
 /// ```
 #[derive(Debug)]
-pub struct HttpClientBuilder<L = Identity> {
+pub struct HttpClientBuilder<L = Identity, IdKind = StringOrNumberId> {
 	max_request_size: u32,
 	max_response_size: u32,
 	request_timeout: Duration,
@@ -86,7 +86,7 @@ pub struct HttpClientBuilder<L = Identity> {
 	tcp_no_delay: bool,
 }
 
-impl<L> HttpClientBuilder<L> {
+impl<L, IdKind> HttpClientBuilder<L, IdKind> {
 	/// Set the maximum size of a request body in bytes. Default is 10 MiB.
 	pub fn max_request_size(mut self, size: u32) -> Self {
 		self.max_request_size = size;
@@ -170,7 +170,7 @@ impl<L> HttpClientBuilder<L> {
 	}
 
 	/// Set custom tower middleware.
-	pub fn set_http_middleware<T>(self, service_builder: tower::ServiceBuilder<T>) -> HttpClientBuilder<T> {
+	pub fn set_http_middleware<T>(self, service_builder: tower::ServiceBuilder<T>) -> HttpClientBuilder<T, IdKind> {
 		HttpClientBuilder {
 			certificate_store: self.certificate_store,
 			id_kind: self.id_kind,
@@ -186,16 +186,17 @@ impl<L> HttpClientBuilder<L> {
 	}
 }
 
-impl<B, S, L> HttpClientBuilder<L>
+impl<B, S, L, IdKind> HttpClientBuilder<L, IdKind>
 where
 	L: Layer<transport::HttpBackend, Service = S>,
 	S: Service<hyper::Request<Body>, Response = hyper::Response<B>, Error = TransportError> + Clone,
 	B: HttpBody + Send + 'static,
 	B::Data: Send,
 	B::Error: Into<Box<dyn StdError + Send + Sync>>,
+	IdKind: traits::IdKind,
 {
 	/// Build the HTTP client with target to connect to.
-	pub fn build(self, target: impl AsRef<str>) -> Result<HttpClient<S>, Error> {
+	pub fn build(self, target: impl AsRef<str>) -> Result<HttpClient<S, IdKind>, Error> {
 		let Self {
 			max_request_size,
 			max_response_size,
@@ -236,7 +237,7 @@ impl Default for HttpClientBuilder<Identity> {
 			request_timeout: Duration::from_secs(60),
 			max_concurrent_requests: 256,
 			certificate_store: CertificateStore::Native,
-			id_kind: IdKind::Number,
+			id_kind: StringOrNumberId::Number,
 			max_log_length: 4096,
 			headers: HeaderMap::new(),
 			service_builder: tower::ServiceBuilder::new(),
@@ -254,13 +255,13 @@ impl HttpClientBuilder<Identity> {
 
 /// JSON-RPC HTTP Client that provides functionality to perform method calls and notifications.
 #[derive(Debug, Clone)]
-pub struct HttpClient<S = HttpBackend> {
+pub struct HttpClient<S = HttpBackend, IdKind = StringOrNumberId> {
 	/// HTTP transport client.
 	transport: HttpTransportClient<S>,
 	/// Request timeout. Defaults to 60sec.
 	request_timeout: Duration,
 	/// Request ID manager.
-	id_manager: Arc<RequestIdManager>,
+	id_manager: Arc<RequestIdManager<IdKind>>,
 }
 
 impl<S> HttpClient<S> {

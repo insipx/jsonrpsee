@@ -42,7 +42,7 @@ use std::sync::Arc;
 use std::task;
 
 use crate::params::BatchRequestBuilder;
-use crate::traits::ToRpcParams;
+use crate::traits::{self, ToRpcParams};
 use async_trait::async_trait;
 use core::marker::PhantomData;
 use futures_util::stream::{Stream, StreamExt};
@@ -390,7 +390,7 @@ impl<Notif> Drop for Subscription<Notif> {
 
 #[derive(Debug)]
 /// Keep track of request IDs.
-pub struct RequestIdManager {
+pub struct RequestIdManager<IdKind> {
 	// Current pending requests.
 	current_pending: Arc<()>,
 	/// Max concurrent pending requests allowed.
@@ -401,7 +401,7 @@ pub struct RequestIdManager {
 	id_kind: IdKind,
 }
 
-impl RequestIdManager {
+impl<IdKind: traits::IdKind> RequestIdManager<IdKind> {
 	/// Create a new `RequestIdGuard` with the provided concurrency limit.
 	pub fn new(limit: usize, id_kind: IdKind) -> Self {
 		Self { current_pending: Arc::new(()), max_concurrent_requests: limit, current_id: CurrentId::new(), id_kind }
@@ -438,8 +438,8 @@ impl RequestIdManager {
 	}
 
 	/// Get a handle to the `IdKind`.
-	pub fn as_id_kind(&self) -> IdKind {
-		self.id_kind
+	pub fn as_id_kind(&self) -> &IdKind {
+		&self.id_kind
 	}
 }
 
@@ -470,19 +470,24 @@ pub enum CertificateStore {
 
 /// JSON-RPC request object id data type.
 #[derive(Debug, Copy, Clone)]
-pub enum IdKind {
+pub enum StringOrNumberId {
 	/// String.
 	String,
 	/// Number.
 	Number,
 }
 
-impl IdKind {
-	/// Generate an `Id` from number.
-	pub fn into_id(self, id: u64) -> Id<'static> {
+impl Default for StringOrNumberId {
+	fn default() -> Self {
+		Self::Number
+	}
+}
+
+impl traits::IdKind for StringOrNumberId {
+	fn into_id(&self, id: u64) -> Id<'static> {
 		match self {
-			IdKind::Number => Id::Number(id),
-			IdKind::String => Id::Str(format!("{id}").into()),
+			StringOrNumberId::Number => Id::Number(id),
+			StringOrNumberId::String => Id::Str(format!("{id}").into()),
 		}
 	}
 }
