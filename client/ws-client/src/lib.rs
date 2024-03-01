@@ -94,7 +94,7 @@ pub struct WsClientBuilder<IdKind = StringOrNumberId> {
 	tcp_no_delay: bool,
 }
 
-impl Default for WsClientBuilder {
+impl<IdKind: Default> Default for WsClientBuilder<IdKind> {
 	fn default() -> Self {
 		Self {
 			certificate_store: CertificateStore::Native,
@@ -107,7 +107,7 @@ impl Default for WsClientBuilder {
 			max_concurrent_requests: 256,
 			max_buffer_capacity_per_subscription: 1024,
 			max_redirections: 5,
-			id_kind: StringOrNumberId::Number,
+			id_kind: IdKind::default(),
 			max_log_length: 4096,
 			tcp_no_delay: true,
 		}
