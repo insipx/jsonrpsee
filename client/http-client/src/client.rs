@@ -330,6 +330,7 @@ where
 		if response.id == id {
 			Ok(result)
 		} else {
+			tracing::debug!("INVALID IN HTTP client.rs");
 			Err(InvalidRequestId::NotPendingRequest(response.id.to_string()).into())
 		}
 	}

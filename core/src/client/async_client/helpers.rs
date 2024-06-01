@@ -24,9 +24,9 @@
 // IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-use crate::client::async_client::LOG_TARGET;
 use crate::client::async_client::manager::{RequestManager, RequestStatus};
-use crate::client::{RequestMessage, TransportSenderT, Error};
+use crate::client::async_client::LOG_TARGET;
+use crate::client::{Error, RequestMessage, TransportSenderT};
 use crate::params::ArrayParams;
 use crate::traits::ToRpcParams;
 
@@ -178,6 +178,7 @@ pub(crate) fn process_single_response(
 
 	match manager.request_status(&response_id) {
 		RequestStatus::PendingMethodCall => {
+			tracing::debug!("RESPONSE in heye: {:?}", response_id);
 			let send_back_oneshot = match manager.complete_pending_call(response_id.clone()) {
 				Some(Some(send)) => send,
 				Some(None) => return Ok(None),
@@ -220,8 +221,9 @@ pub(crate) fn process_single_response(
 				Ok(None)
 			}
 		}
-
 		RequestStatus::Subscription | RequestStatus::Invalid => {
+			tracing::debug!("Response: {:?}", result);
+			tracing::debug!("INvalid Request Status response_id={}", response_id.to_string());
 			Err(InvalidRequestId::NotPendingRequest(response_id.to_string()))
 		}
 	}
