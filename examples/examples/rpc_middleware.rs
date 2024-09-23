@@ -43,7 +43,7 @@ use std::sync::Arc;
 
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use jsonrpsee::core::{async_trait, client::ClientT};
+use jsonrpsee::core::client::ClientT;
 use jsonrpsee::rpc_params;
 use jsonrpsee::server::middleware::rpc::{RpcServiceBuilder, RpcServiceT};
 use jsonrpsee::server::{MethodResponse, RpcModule, Server};
@@ -85,7 +85,6 @@ pub struct GlobalCalls<S> {
 	count: Arc<AtomicUsize>,
 }
 
-#[async_trait]
 impl<'a, S> RpcServiceT<'a> for GlobalCalls<S>
 where
 	S: RpcServiceT<'a> + Send + Sync + Clone + 'static,
@@ -157,8 +156,8 @@ async fn run_server() -> anyhow::Result<SocketAddr> {
 		.layer_fn(move |service| GlobalCalls { service, count: global_cnt.clone() });
 	let server = Server::builder().set_rpc_middleware(rpc_middleware).build("127.0.0.1:0").await?;
 	let mut module = RpcModule::new(());
-	module.register_method("say_hello", |_, _| "lo")?;
-	module.register_method("thready", |params, _| {
+	module.register_method("say_hello", |_, _, _| "lo")?;
+	module.register_method("thready", |params, _, _| {
 		let thread_count: usize = params.one().unwrap();
 		for _ in 0..thread_count {
 			std::thread::spawn(|| std::thread::sleep(std::time::Duration::from_secs(1)));

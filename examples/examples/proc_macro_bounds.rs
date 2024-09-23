@@ -31,7 +31,6 @@ use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::server::Server;
 use jsonrpsee::types::ErrorObjectOwned;
 use jsonrpsee::ws_client::WsClientBuilder;
-
 type ExampleHash = [u8; 32];
 
 pub trait Config {

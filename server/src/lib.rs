@@ -29,18 +29,20 @@
 //! `jsonrpsee-server` is a [JSON RPC](https://www.jsonrpc.org/specification) server that supports both HTTP and WebSocket transport.
 
 #![warn(missing_docs, missing_debug_implementations, missing_copy_implementations, unreachable_pub)]
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod future;
 mod server;
 mod transport;
+mod utils;
 
 pub mod middleware;
 
 #[cfg(test)]
 mod tests;
 
-pub use future::{stop_channel, ConnectionGuard, ConnectionPermit, ServerHandle, StopHandle};
+pub use future::{stop_channel, AlreadyStoppedError, ConnectionGuard, ConnectionPermit, ServerHandle, StopHandle};
 pub use jsonrpsee_core::error::RegisterMethodError;
 pub use jsonrpsee_core::server::*;
 pub use jsonrpsee_core::{id_providers::*, traits::IdProvider};
@@ -52,7 +54,9 @@ pub use server::{
 };
 pub use tracing;
 
+pub use jsonrpsee_core::http_helpers::{Body as HttpBody, Request as HttpRequest, Response as HttpResponse};
 pub use transport::http;
 pub use transport::ws;
+pub use utils::{serve, serve_with_graceful_shutdown};
 
 pub(crate) const LOG_TARGET: &str = "jsonrpsee-server";

@@ -26,7 +26,7 @@
 
 //! Error type for client(s).
 
-use crate::{params::EmptyBatchRequest, RegisterMethodError};
+use crate::{params::EmptyBatchRequest, BoxError, RegisterMethodError};
 use jsonrpsee_types::{ErrorObjectOwned, InvalidRequestId};
 use std::sync::Arc;
 
@@ -37,8 +37,8 @@ pub enum Error {
 	#[error("{0}")]
 	Call(#[from] ErrorObjectOwned),
 	/// Networking error or error on the low-level protocol layer.
-	#[error("{0}")]
-	Transport(#[source] anyhow::Error),
+	#[error(transparent)]
+	Transport(BoxError),
 	/// The background task has been terminated.
 	#[error("The background task closed {0}; restart required")]
 	RestartNeeded(Arc<Error>),
@@ -49,14 +49,11 @@ pub enum Error {
 	#[error("Invalid subscription ID")]
 	InvalidSubscriptionId,
 	/// Invalid request ID.
-	#[error("{0}")]
+	#[error(transparent)]
 	InvalidRequestId(#[from] InvalidRequestId),
 	/// Request timeout
 	#[error("Request timeout")]
 	RequestTimeout,
-	/// Max number of request slots exceeded.
-	#[error("Max concurrent requests exceeded")]
-	MaxSlotsExceeded,
 	/// Custom error.
 	#[error("Custom error: {0}")]
 	Custom(String),
@@ -64,9 +61,9 @@ pub enum Error {
 	#[error("Not implemented")]
 	HttpNotImplemented,
 	/// Empty batch request.
-	#[error("{0}")]
+	#[error(transparent)]
 	EmptyBatchRequest(#[from] EmptyBatchRequest),
 	/// The error returned when registering a method or subscription failed.
-	#[error("{0}")]
+	#[error(transparent)]
 	RegisterMethod(#[from] RegisterMethodError),
 }

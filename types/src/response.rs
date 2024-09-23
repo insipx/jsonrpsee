@@ -168,7 +168,7 @@ impl<'a, T: Clone> ResponsePayload<'a, T> {
 		Self::Error(e.into())
 	}
 
-	/// Create a borrowd error response payload.
+	/// Create a borrowed error response payload.
 	pub fn error_borrowed(e: impl Into<ErrorObject<'a>>) -> Self {
 		Self::Error(e.into())
 	}
@@ -189,11 +189,13 @@ where
 		D: Deserializer<'de>,
 		T: Deserialize<'de> + Clone,
 	{
+		#[derive(Debug)]
 		enum Field {
 			Jsonrpc,
 			Result,
 			Error,
 			Id,
+			Ignore,
 		}
 
 		impl<'de> Deserialize<'de> for Field {
@@ -219,7 +221,7 @@ where
 							"result" => Ok(Field::Result),
 							"error" => Ok(Field::Error),
 							"id" => Ok(Field::Id),
-							_ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+							_ => Ok(Field::Ignore),
 						}
 					}
 				}
@@ -279,6 +281,9 @@ where
 							}
 							jsonrpc = Some(map.next_value()?);
 						}
+						Field::Ignore => {
+							let _ = map.next_value::<serde::de::IgnoredAny>()?;
+						}
 					}
 				}
 
@@ -322,12 +327,13 @@ where
 			s.serialize_field("jsonrpc", field)?;
 		}
 
+		s.serialize_field("id", &self.id)?;
+
 		match &self.payload {
 			ResponsePayload::Error(err) => s.serialize_field("error", err)?,
 			ResponsePayload::Success(r) => s.serialize_field("result", r)?,
 		};
 
-		s.serialize_field("id", &self.id)?;
 		s.end()
 	}
 }
@@ -345,7 +351,7 @@ mod tests {
 			id: Id::Number(1),
 		})
 		.unwrap();
-		let exp = r#"{"jsonrpc":"2.0","result":"ok","id":1}"#;
+		let exp = r#"{"jsonrpc":"2.0","id":1,"result":"ok"}"#;
 		assert_eq!(ser, exp);
 	}
 
@@ -357,7 +363,7 @@ mod tests {
 			id: Id::Number(1),
 		})
 		.unwrap();
-		let exp = r#"{"jsonrpc":"2.0","error":{"code":1,"message":"lo"},"id":1}"#;
+		let exp = r#"{"jsonrpc":"2.0","id":1,"error":{"code":1,"message":"lo"}}"#;
 		assert_eq!(ser, exp);
 	}
 
@@ -369,7 +375,7 @@ mod tests {
 			id: Id::Number(1),
 		})
 		.unwrap();
-		let exp = r#"{"result":"ok","id":1}"#;
+		let exp = r#"{"id":1,"result":"ok"}"#;
 		assert_eq!(ser, exp);
 	}
 
@@ -401,6 +407,16 @@ mod tests {
 	fn deserialize_call_missing_version_field() {
 		let exp = Response { jsonrpc: None, payload: ResponsePayload::success(99_u64), id: Id::Number(11) };
 		let dsr: Response<u64> = serde_json::from_str(r#"{"jsonrpc":null, "result":99, "id":11}"#).unwrap();
+		assert_eq!(dsr.jsonrpc, exp.jsonrpc);
+		assert_eq!(dsr.payload, exp.payload);
+		assert_eq!(dsr.id, exp.id);
+	}
+
+	#[test]
+	fn deserialize_with_unknown_field() {
+		let exp = Response { jsonrpc: None, payload: ResponsePayload::success(99_u64), id: Id::Number(11) };
+		let dsr: Response<u64> =
+			serde_json::from_str(r#"{"jsonrpc":null, "result":99, "id":11, "unknown":11}"#).unwrap();
 		assert_eq!(dsr.jsonrpc, exp.jsonrpc);
 		assert_eq!(dsr.payload, exp.payload);
 		assert_eq!(dsr.id, exp.id);

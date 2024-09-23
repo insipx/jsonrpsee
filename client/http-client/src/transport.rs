@@ -6,16 +6,18 @@
 // that we need to be guaranteed that hyper doesn't re-use an existing connection if we ever reset
 // the JSON-RPC request id to a value that might have already been used.
 
-use hyper::body::{Body, HttpBody};
-use hyper::client::{Client, HttpConnector};
+use base64::Engine;
+use hyper::body::Bytes;
 use hyper::http::{HeaderMap, HeaderValue};
-use jsonrpsee_core::client::CertificateStore;
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
 use jsonrpsee_core::tracing::client::{rx_log_from_bytes, tx_log_from_str};
+use jsonrpsee_core::BoxError;
 use jsonrpsee_core::{
 	http_helpers::{self, HttpError},
 	TEN_MB_SIZE_BYTES,
 };
-use std::error::Error as StdError;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -24,55 +26,60 @@ use tower::layer::util::Identity;
 use tower::{Layer, Service, ServiceExt};
 use url::Url;
 
+use crate::{HttpBody, HttpRequest, HttpResponse};
+
+#[cfg(feature = "tls")]
+use crate::{CertificateStore, CustomCertStore};
+
 const CONTENT_TYPE_JSON: &str = "application/json";
 
 /// Wrapper over HTTP transport and connector.
 #[derive(Debug)]
-pub enum HttpBackend<B = Body> {
+pub enum HttpBackend<B = HttpBody> {
 	/// Hyper client with https connector.
-	#[cfg(feature = "__tls")]
+	#[cfg(feature = "tls")]
 	Https(Client<hyper_rustls::HttpsConnector<HttpConnector>, B>),
 	/// Hyper client with http connector.
 	Http(Client<HttpConnector, B>),
 }
 
-impl Clone for HttpBackend {
+impl<B> Clone for HttpBackend<B> {
 	fn clone(&self) -> Self {
 		match self {
 			Self::Http(inner) => Self::Http(inner.clone()),
-			#[cfg(feature = "__tls")]
+			#[cfg(feature = "tls")]
 			Self::Https(inner) => Self::Https(inner.clone()),
 		}
 	}
 }
 
-impl<B> tower::Service<hyper::Request<B>> for HttpBackend<B>
+impl<B> tower::Service<HttpRequest<B>> for HttpBackend<B>
 where
-	B: HttpBody<Error = hyper::Error> + Send + 'static,
+	B: http_body::Body<Data = Bytes> + Send + Unpin + 'static,
 	B::Data: Send,
-	B::Error: Into<Box<dyn StdError + Send + Sync>>,
+	B::Error: Into<BoxError>,
 {
-	type Response = hyper::Response<Body>;
+	type Response = HttpResponse<hyper::body::Incoming>;
 	type Error = Error;
 	type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
 	fn poll_ready(&mut self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
 		match self {
 			Self::Http(inner) => inner.poll_ready(ctx),
-			#[cfg(feature = "__tls")]
+			#[cfg(feature = "tls")]
 			Self::Https(inner) => inner.poll_ready(ctx),
 		}
-		.map_err(|e| Error::Http(e.into()))
+		.map_err(|e| Error::Http(HttpError::Stream(e.into())))
 	}
 
-	fn call(&mut self, req: hyper::Request<B>) -> Self::Future {
+	fn call(&mut self, req: HttpRequest<B>) -> Self::Future {
 		let resp = match self {
 			Self::Http(inner) => inner.call(req),
-			#[cfg(feature = "__tls")]
+			#[cfg(feature = "tls")]
 			Self::Https(inner) => inner.call(req),
 		};
 
-		Box::pin(async move { resp.await.map_err(|e| Error::Http(e.into())) })
+		Box::pin(async move { resp.await.map_err(|e| Error::Http(HttpError::Stream(e.into()))) })
 	}
 }
 
@@ -80,21 +87,22 @@ where
 #[derive(Debug)]
 pub struct HttpTransportClientBuilder<L> {
 	/// Certificate store.
-	certificate_store: CertificateStore,
+	#[cfg(feature = "tls")]
+	pub(crate) certificate_store: CertificateStore,
 	/// Configurable max request body size
-	max_request_size: u32,
+	pub(crate) max_request_size: u32,
 	/// Configurable max response body size
-	max_response_size: u32,
+	pub(crate) max_response_size: u32,
 	/// Max length for logging for requests and responses
 	///
 	/// Logs bigger than this limit will be truncated.
-	max_log_length: u32,
+	pub(crate) max_log_length: u32,
 	/// Custom headers to pass with every request.
-	headers: HeaderMap,
+	pub(crate) headers: HeaderMap,
 	/// Service builder
-	service_builder: tower::ServiceBuilder<L>,
+	pub(crate) service_builder: tower::ServiceBuilder<L>,
 	/// TCP_NODELAY
-	tcp_no_delay: bool,
+	pub(crate) tcp_no_delay: bool,
 }
 
 impl Default for HttpTransportClientBuilder<Identity> {
@@ -107,6 +115,7 @@ impl HttpTransportClientBuilder<Identity> {
 	/// Create a new [`HttpTransportClientBuilder`].
 	pub fn new() -> Self {
 		Self {
+			#[cfg(feature = "tls")]
 			certificate_store: CertificateStore::Native,
 			max_request_size: TEN_MB_SIZE_BYTES,
 			max_response_size: TEN_MB_SIZE_BYTES,
@@ -119,9 +128,10 @@ impl HttpTransportClientBuilder<Identity> {
 }
 
 impl<L> HttpTransportClientBuilder<L> {
-	/// Set the certificate store.
-	pub fn set_certification_store(mut self, cert_store: CertificateStore) -> Self {
-		self.certificate_store = cert_store;
+	/// See docs [`crate::HttpClientBuilder::with_custom_cert_store`] for more information.
+	#[cfg(feature = "tls")]
+	pub fn with_custom_cert_store(mut self, cfg: CustomCertStore) -> Self {
+		self.certificate_store = CertificateStore::Custom(cfg);
 		self
 	}
 
@@ -164,6 +174,7 @@ impl<L> HttpTransportClientBuilder<L> {
 	/// Configure a tower service.
 	pub fn set_service<T>(self, service: tower::ServiceBuilder<T>) -> HttpTransportClientBuilder<T> {
 		HttpTransportClientBuilder {
+			#[cfg(feature = "tls")]
 			certificate_store: self.certificate_store,
 			headers: self.headers,
 			max_log_length: self.max_log_length,
@@ -177,13 +188,14 @@ impl<L> HttpTransportClientBuilder<L> {
 	/// Build a [`HttpTransportClient`].
 	pub fn build<S, B>(self, target: impl AsRef<str>) -> Result<HttpTransportClient<S>, Error>
 	where
-		L: Layer<HttpBackend<Body>, Service = S>,
-		S: Service<hyper::Request<Body>, Response = hyper::Response<B>, Error = Error> + Clone,
-		B: HttpBody + Send + 'static,
+		L: Layer<HttpBackend, Service = S>,
+		S: Service<HttpRequest, Response = HttpResponse<B>, Error = Error> + Clone,
+		B: http_body::Body<Data = Bytes> + Send + 'static,
 		B::Data: Send,
-		B::Error: Into<Box<dyn StdError + Send + Sync>>,
+		B::Error: Into<BoxError>,
 	{
 		let Self {
+			#[cfg(feature = "tls")]
 			certificate_store,
 			max_request_size,
 			max_response_size,
@@ -193,6 +205,7 @@ impl<L> HttpTransportClientBuilder<L> {
 			tcp_no_delay,
 		} = self;
 		let mut url = Url::parse(target.as_ref()).map_err(|e| Error::Url(format!("Invalid URL: {e}")))?;
+
 		if url.host_str().is_none() {
 			return Err(Error::Url("Invalid host".into()));
 		}
@@ -202,36 +215,40 @@ impl<L> HttpTransportClientBuilder<L> {
 			"http" => {
 				let mut connector = HttpConnector::new();
 				connector.set_nodelay(tcp_no_delay);
-				HttpBackend::Http(Client::builder().build(connector))
+				HttpBackend::Http(Client::builder(TokioExecutor::new()).build(connector))
 			}
-			#[cfg(feature = "__tls")]
+			#[cfg(feature = "tls")]
 			"https" => {
+				// Make sure that the TLS provider is set. If not, set a default one.
+				// Otherwise, creating `tls` configuration may panic if there are multiple
+				// providers available due to `rustls` features (e.g. both `ring` and `aws-lc-rs`).
+				// Function returns an error if the provider is already installed, and we're fine with it.
+				let _ = rustls::crypto::ring::default_provider().install_default();
+
 				let mut http_conn = HttpConnector::new();
 				http_conn.set_nodelay(tcp_no_delay);
 				http_conn.enforce_http(false);
 
 				let https_conn = match certificate_store {
-					#[cfg(feature = "native-tls")]
 					CertificateStore::Native => hyper_rustls::HttpsConnectorBuilder::new()
-						.with_native_roots()
+						.with_tls_config(rustls_platform_verifier::tls_config())
 						.https_or_http()
 						.enable_all_versions()
 						.wrap_connector(http_conn),
-					#[cfg(feature = "webpki-tls")]
-					CertificateStore::WebPki => hyper_rustls::HttpsConnectorBuilder::new()
-						.with_webpki_roots()
+
+					CertificateStore::Custom(tls_config) => hyper_rustls::HttpsConnectorBuilder::new()
+						.with_tls_config(tls_config)
 						.https_or_http()
 						.enable_all_versions()
 						.wrap_connector(http_conn),
-					_ => return Err(Error::InvalidCertficateStore),
 				};
 
-				HttpBackend::Https(Client::builder().build::<_, hyper::Body>(https_conn))
+				HttpBackend::Https(Client::builder(TokioExecutor::new()).build(https_conn))
 			}
 			_ => {
-				#[cfg(feature = "__tls")]
+				#[cfg(feature = "tls")]
 				let err = "URL scheme not supported, expects 'http' or 'https'";
-				#[cfg(not(feature = "__tls"))]
+				#[cfg(not(feature = "tls"))]
 				let err = "URL scheme not supported, expects 'http'";
 				return Err(Error::Url(err.into()));
 			}
@@ -246,6 +263,17 @@ impl<L> HttpTransportClientBuilder<L> {
 		for (key, value) in headers.into_iter() {
 			if let Some(key) = key {
 				cached_headers.insert(key, value);
+			}
+		}
+
+		if let Some(pwd) = url.password() {
+			if !cached_headers.contains_key(hyper::header::AUTHORIZATION) {
+				let digest = base64::engine::general_purpose::STANDARD.encode(format!("{}:{pwd}", url.username()));
+				cached_headers.insert(
+					hyper::header::AUTHORIZATION,
+					HeaderValue::from_str(&format!("Basic {digest}"))
+						.map_err(|_| Error::Url("Header value `authorization basic user:pwd` invalid".into()))?,
+				);
 			}
 		}
 
@@ -281,20 +309,22 @@ pub struct HttpTransportClient<S> {
 
 impl<B, S> HttpTransportClient<S>
 where
-	S: Service<hyper::Request<Body>, Response = hyper::Response<B>, Error = Error> + Clone,
-	B: HttpBody<Error = hyper::Error> + Send + 'static,
+	S: Service<HttpRequest, Response = HttpResponse<B>, Error = Error> + Clone,
+	B: http_body::Body<Data = Bytes> + Send + 'static,
 	B::Data: Send,
+	B::Error: Into<BoxError>,
 {
-	async fn inner_send(&self, body: String) -> Result<hyper::Response<B>, Error> {
+	async fn inner_send(&self, body: String) -> Result<HttpResponse<B>, Error> {
 		if body.len() > self.max_request_size as usize {
 			return Err(Error::RequestTooLarge);
 		}
 
-		let mut req = hyper::Request::post(&self.target);
+		let mut req = HttpRequest::post(&self.target);
 		if let Some(headers) = req.headers_mut() {
 			*headers = self.headers.clone();
 		}
-		let req = req.body(From::from(body)).expect("URI and request headers are valid; qed");
+
+		let req = req.body(body.into()).expect("URI and request headers are valid; qed");
 		let response = self.client.clone().ready().await?.call(req).await?;
 
 		if response.status().is_success() {
@@ -310,7 +340,8 @@ where
 
 		let response = self.inner_send(body).await?;
 		let (parts, body) = response.into_parts();
-		let (body, _) = http_helpers::read_body(&parts.headers, body, self.max_response_size).await?;
+
+		let (body, _is_single) = http_helpers::read_body(&parts.headers, body, self.max_response_size).await?;
 
 		rx_log_from_bytes(&body, self.max_log_length);
 
@@ -333,7 +364,7 @@ pub enum Error {
 	Url(String),
 
 	/// Error during the HTTP request, including networking errors and HTTP protocol errors.
-	#[error("{0}")]
+	#[error(transparent)]
 	Http(#[from] HttpError),
 
 	/// Server returned a non-success status code.
@@ -362,14 +393,14 @@ mod tests {
 		assert!(matches!(err, Error::Url(_)));
 	}
 
-	#[cfg(feature = "__tls")]
+	#[cfg(feature = "tls")]
 	#[test]
 	fn https_works() {
 		let client = HttpTransportClientBuilder::new().build("https://localhost").unwrap();
 		assert_eq!(&client.target, "https://localhost/");
 	}
 
-	#[cfg(not(feature = "__tls"))]
+	#[cfg(not(feature = "tls"))]
 	#[test]
 	fn https_fails_without_tls_feature() {
 		let err = HttpTransportClientBuilder::new().build("https://localhost").unwrap_err();
@@ -409,7 +440,7 @@ mod tests {
 		assert_eq!(&client.target, "http://127.0.0.1/");
 	}
 
-	#[cfg(feature = "__tls")]
+	#[cfg(feature = "tls")]
 	#[test]
 	fn https_custom_port_works() {
 		let client = HttpTransportClientBuilder::new().build("https://localhost:9999").unwrap();

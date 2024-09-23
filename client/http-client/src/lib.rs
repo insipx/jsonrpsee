@@ -33,6 +33,7 @@
 //! [`async-std`](https://docs.rs/async-std/), [`smol`](https://docs.rs/smol) and similar.
 
 #![warn(missing_docs, missing_debug_implementations, missing_copy_implementations, unreachable_pub)]
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod client;
@@ -46,3 +47,23 @@ mod tests;
 pub use client::{HttpClient, HttpClientBuilder};
 pub use hyper::http::{HeaderMap, HeaderValue};
 pub use jsonrpsee_types as types;
+
+/// Default HTTP body for the client.
+pub type HttpBody = jsonrpsee_core::http_helpers::Body;
+/// HTTP request with default body.
+pub type HttpRequest<T = HttpBody> = jsonrpsee_core::http_helpers::Request<T>;
+/// HTTP response with default body.
+pub type HttpResponse<T = HttpBody> = jsonrpsee_core::http_helpers::Response<T>;
+
+/// Custom TLS configuration.
+#[cfg(feature = "tls")]
+pub type CustomCertStore = rustls::ClientConfig;
+
+#[cfg(feature = "tls")]
+// rustls needs the concrete `ClientConfig` type so we can't Box it here.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub(crate) enum CertificateStore {
+	Native,
+	Custom(CustomCertStore),
+}

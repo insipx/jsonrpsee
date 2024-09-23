@@ -28,6 +28,7 @@ use crate::server::{BoundedWriter, LOG_TARGET};
 use std::task::Poll;
 
 use futures_util::{Future, FutureExt};
+use http::Extensions;
 use jsonrpsee_types::error::{
 	reject_too_big_batch_response, ErrorCode, ErrorObject, OVERSIZED_RESPONSE_CODE, OVERSIZED_RESPONSE_MSG,
 };
@@ -59,6 +60,8 @@ pub struct MethodResponse {
 	/// Optional callback that may be utilized to notif
 	/// that the method response has been processed
 	on_close: Option<MethodResponseNotifyTx>,
+	/// The response's extensions.
+	extensions: Extensions,
 }
 
 impl MethodResponse {
@@ -121,6 +124,7 @@ impl MethodResponse {
 			success_or_error: MethodResponseResult::Success,
 			kind: ResponseKind::Batch,
 			on_close: None,
+			extensions: Extensions::new(),
 		}
 	}
 
@@ -158,7 +162,7 @@ impl MethodResponse {
 				// Safety - serde_json does not emit invalid UTF-8.
 				let result = unsafe { String::from_utf8_unchecked(writer.into_bytes()) };
 
-				Self { result, success_or_error, kind, on_close: rp.on_exit }
+				Self { result, success_or_error, kind, on_close: rp.on_exit, extensions: Extensions::new() }
 			}
 			Err(err) => {
 				tracing::error!(target: LOG_TARGET, "Error serializing response: {:?}", err);
@@ -180,6 +184,7 @@ impl MethodResponse {
 						success_or_error: MethodResponseResult::Failed(err_code),
 						kind,
 						on_close: rp.on_exit,
+						extensions: Extensions::new(),
 					}
 				} else {
 					let err = ErrorCode::InternalError;
@@ -191,6 +196,7 @@ impl MethodResponse {
 						success_or_error: MethodResponseResult::Failed(err.code()),
 						kind,
 						on_close: rp.on_exit,
+						extensions: Extensions::new(),
 					}
 				}
 			}
@@ -216,7 +222,23 @@ impl MethodResponse {
 			success_or_error: MethodResponseResult::Failed(err_code),
 			kind: ResponseKind::MethodCall,
 			on_close: None,
+			extensions: Extensions::new(),
 		}
+	}
+
+	/// Returns a reference to the associated extensions.
+	pub fn extensions(&self) -> &Extensions {
+		&self.extensions
+	}
+
+	/// Returns a reference to the associated extensions.
+	pub fn extensions_mut(&mut self) -> &mut Extensions {
+		&mut self.extensions
+	}
+
+	/// Consumes the method response and returns a new one with the given extensions.
+	pub fn with_extensions(self, extensions: Extensions) -> Self {
+		Self { extensions, ..self }
 	}
 }
 
@@ -454,7 +476,7 @@ mod tests {
 		builder.append(&method).unwrap();
 		let batch = builder.finish();
 
-		assert_eq!(batch.0, r#"[{"jsonrpc":"2.0","result":"a","id":1}]"#)
+		assert_eq!(batch.0, r#"[{"jsonrpc":"2.0","id":1,"result":"a"}]"#)
 	}
 
 	#[test]
@@ -470,14 +492,14 @@ mod tests {
 		builder.append(&m1).unwrap();
 		let batch = builder.finish();
 
-		assert_eq!(batch.0, r#"[{"jsonrpc":"2.0","result":"a","id":1},{"jsonrpc":"2.0","result":"a","id":1}]"#)
+		assert_eq!(batch.0, r#"[{"jsonrpc":"2.0","id":1,"result":"a"},{"jsonrpc":"2.0","id":1,"result":"a"}]"#)
 	}
 
 	#[test]
 	fn batch_empty_err() {
 		let batch = BatchResponseBuilder::new_with_limit(1024).finish();
 
-		let exp_err = r#"{"jsonrpc":"2.0","error":{"code":-32600,"message":"Invalid request"},"id":null}"#;
+		let exp_err = r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Invalid request"}}"#;
 		assert_eq!(batch.0, exp_err);
 	}
 
@@ -488,7 +510,7 @@ mod tests {
 
 		let batch = BatchResponseBuilder::new_with_limit(63).append(&method).unwrap_err();
 
-		let exp_err = r#"{"jsonrpc":"2.0","error":{"code":-32011,"message":"The batch response was too large","data":"Exceeded max limit of 63"},"id":null}"#;
+		let exp_err = r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32011,"message":"The batch response was too large","data":"Exceeded max limit of 63"}}"#;
 		assert_eq!(batch.result, exp_err);
 	}
 }

@@ -27,6 +27,7 @@
 //! Shared utilities for `jsonrpsee`.
 
 #![warn(missing_docs, missing_debug_implementations, missing_copy_implementations, unreachable_pub)]
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 // Macros useful internally within this crate, but not to be exposed outside of it.
@@ -49,7 +50,6 @@ cfg_http_helpers! {
 cfg_server! {
 	pub mod id_providers;
 	pub mod server;
-
 }
 
 cfg_client! {
@@ -68,6 +68,9 @@ pub type RpcResult<T> = std::result::Result<T, jsonrpsee_types::ErrorObjectOwned
 /// Empty server `RpcParams` type to use while registering modules.
 pub type EmptyServerParams = Vec<()>;
 
+#[doc(hidden)]
+mod proc_macros_support;
+
 /// Re-exports for proc-macro library to not require any additional
 /// dependencies to be explicitly added on the client side.
 #[doc(hidden)]
@@ -75,17 +78,27 @@ pub mod __reexports {
 	pub use async_trait::async_trait;
 	pub use serde;
 	pub use serde_json;
+
+	// Needed for the params parsing in the proc macro API.
+	cfg_client_or_server! {
+		pub use tokio;
+	}
+
+	pub use super::proc_macros_support::*;
 }
 
-pub use beef::Cow;
 pub use serde::{de::DeserializeOwned, Serialize};
 pub use serde_json::{
 	to_value as to_json_value, value::to_raw_value as to_json_raw_value, value::RawValue as JsonRawValue,
 	Value as JsonValue,
 };
+pub use std::borrow::Cow;
 
 /// Ten megabytes.
 pub const TEN_MB_SIZE_BYTES: u32 = 10 * 1024 * 1024;
 
 /// The return type if the subscription wants to return `Result`.
 pub type SubscriptionResult = Result<(), StringError>;
+
+/// Type erased error.
+pub type BoxError = Box<dyn std::error::Error + Send + Sync>;

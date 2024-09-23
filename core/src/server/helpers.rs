@@ -137,9 +137,19 @@ impl MethodSink {
 		self.send(json).await
 	}
 
-	/// Similar to to `MethodSink::send` but only waits for a limited time.
+	/// Similar to `MethodSink::send` but only waits for a limited time.
 	pub async fn send_timeout(&self, msg: String, timeout: Duration) -> Result<(), SendTimeoutError> {
 		self.tx.send_timeout(msg, timeout).await.map_err(Into::into)
+	}
+
+	/// Get the capacity of the channel.
+	pub fn capacity(&self) -> usize {
+		self.tx.capacity()
+	}
+
+	/// Get the max capacity of the channel.
+	pub fn max_capacity(&self) -> usize {
+		self.tx.max_capacity()
 	}
 
 	/// Waits for there to be space on the return channel.
@@ -174,7 +184,7 @@ mod tests {
 		let rp = &Response::new(result, Id::Number(1));
 
 		assert!(serde_json::to_writer(&mut writer, rp).is_ok());
-		assert_eq!(String::from_utf8(writer.into_bytes()).unwrap(), r#"{"jsonrpc":"2.0","result":"success","id":1}"#);
+		assert_eq!(String::from_utf8(writer.into_bytes()).unwrap(), r#"{"jsonrpc":"2.0","id":1,"result":"success"}"#);
 	}
 
 	#[test]

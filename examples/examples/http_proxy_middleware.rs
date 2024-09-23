@@ -37,15 +37,18 @@
 //! This functionality is useful for services which would
 //! like to query a certain `URI` path for statistics.
 
-use hyper::{Body, Client, Request};
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
 use std::net::SocketAddr;
 use std::time::Duration;
 
 use jsonrpsee::core::client::ClientT;
-use jsonrpsee::http_client::HttpClientBuilder;
+use jsonrpsee::http_client::HttpClient;
 use jsonrpsee::rpc_params;
 use jsonrpsee::server::middleware::http::ProxyGetRequestLayer;
 use jsonrpsee::server::{RpcModule, Server};
+
+type EmptyBody = http_body_util::Empty<hyper::body::Bytes>;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -58,22 +61,22 @@ async fn main() -> anyhow::Result<()> {
 	let url = format!("http://{}", addr);
 
 	// Use RPC client to get the response of `say_hello` method.
-	let client = HttpClientBuilder::default().build(&url)?;
+	let client = HttpClient::builder().build(&url)?;
 	let response: String = client.request("say_hello", rpc_params![]).await?;
 	println!("[main]: response: {:?}", response);
 
 	// Use hyper client to manually submit a `GET /health` request.
-	let http_client = Client::new();
+	let http_client = Client::builder(TokioExecutor::new()).build_http();
 	let uri = format!("http://{}/health", addr);
 
-	let req = Request::builder().method("GET").uri(&uri).body(Body::empty())?;
+	let req = hyper::Request::builder().method("GET").uri(&uri).body(EmptyBody::new())?;
 	println!("[main]: Submit proxy request: {:?}", req);
 	let res = http_client.request(req).await?;
 	println!("[main]: Received proxy response: {:?}", res);
 
 	// Interpret the response as String.
-	let bytes = hyper::body::to_bytes(res.into_body()).await.unwrap();
-	let out = String::from_utf8(bytes.to_vec()).unwrap();
+	let collected = http_body_util::BodyExt::collect(res.into_body()).await?;
+	let out = String::from_utf8(collected.to_bytes().to_vec()).unwrap();
 	println!("[main]: Interpret proxy response: {:?}", out);
 	assert_eq!(out.as_str(), "{\"health\":true}");
 
@@ -93,8 +96,8 @@ async fn run_server() -> anyhow::Result<SocketAddr> {
 	let addr = server.local_addr()?;
 
 	let mut module = RpcModule::new(());
-	module.register_method("say_hello", |_, _| "lo").unwrap();
-	module.register_method("system_health", |_, _| serde_json::json!({ "health": true })).unwrap();
+	module.register_method("say_hello", |_, _, _| "lo").unwrap();
+	module.register_method("system_health", |_, _, _| serde_json::json!({ "health": true })).unwrap();
 
 	let handle = server.start(module);
 

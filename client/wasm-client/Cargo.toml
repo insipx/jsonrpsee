@@ -13,7 +13,15 @@ keywords.workspace = true
 readme.workspace = true
 publish = true
 
-[dependencies]
+[target.'cfg(target_arch = "wasm32")'.dependencies]
 jsonrpsee-types = { workspace = true }
 jsonrpsee-client-transport = { workspace = true, features = ["web"] }
 jsonrpsee-core = { workspace = true, features = ["async-wasm-client"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["wasm32-unknown-unknown"]
+
+[package.metadata.playground]
+all-features = true

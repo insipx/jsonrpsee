@@ -14,7 +14,7 @@ readme.workspace = true
 publish = true
 
 [dependencies]
-http = "0.2.0"
+http = "1"
 jsonrpsee-types = { workspace = true }
 jsonrpsee-client-transport = { workspace = true, features = ["ws"] }
 jsonrpsee-core = { workspace = true, features = ["async-client"] }
@@ -23,14 +23,15 @@ url = "2.4.0"
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.3", features = ["env-filter"] }
 jsonrpsee-test-utils = { path = "../../test-utils" }
-tokio = { version = "1.16", features = ["macros"] }
+tokio = { version = "1.23.1", features = ["macros"] }
 serde_json = "1"
 serde = "1"
+rustls = { version = "0.23.7", default-features = false, features = ["logging", "std", "tls12", "ring"] }
 
 [features]
-native-tls = ["jsonrpsee-client-transport/native-tls"]
-webpki-tls = ["jsonrpsee-client-transport/webpki-tls"]
-default = ["native-tls"]
+tls = ["jsonrpsee-client-transport/tls"]
+tls-rustls-platform-verifier = ["jsonrpsee-client-transport/tls-rustls-platform-verifier", "tls"]
+default = ["tls-rustls-platform-verifier"]
 
 [package.metadata.docs.rs]
 all-features = true

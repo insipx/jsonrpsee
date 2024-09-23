@@ -305,6 +305,21 @@ impl PendingSubscriptionSink {
 	pub fn connection_id(&self) -> ConnectionId {
 		self.uniq_sub.conn_id
 	}
+
+	/// Get the capacity of the channel.
+	pub fn capacity(&self) -> usize {
+		self.inner.capacity()
+	}
+
+	/// Get the max capacity of the channel.
+	pub fn max_capacity(&self) -> usize {
+		self.inner.max_capacity()
+	}
+
+	/// Get the method name.
+	pub fn method_name(&self) -> &str {
+		self.method
+	}
 }
 
 /// Represents a single subscription that hasn't been processed yet.
@@ -360,7 +375,7 @@ impl SubscriptionSink {
 		self.inner.send(json).await.map_err(Into::into)
 	}
 
-	/// Similar to to `SubscriptionSink::send` but only waits for a limited time.
+	/// Similar to `SubscriptionSink::send` but only waits for a limited time.
 	pub async fn send_timeout(&self, msg: SubscriptionMessage, timeout: Duration) -> Result<(), SendTimeoutError> {
 		// Only possible to trigger when the connection is dropped.
 		if self.is_closed() {
@@ -399,6 +414,16 @@ impl SubscriptionSink {
 			_ = self.inner.closed() => (),
 			_ = self.unsubscribe.unsubscribed() => (),
 		}
+	}
+
+	/// Get the capacity of the subscription.
+	pub fn capacity(&self) -> usize {
+		self.inner.capacity()
+	}
+
+	/// Get the max capacity of the subscription.
+	pub fn max_capacity(&self) -> usize {
+		self.inner.max_capacity()
 	}
 
 	fn is_active_subscription(&self) -> bool {

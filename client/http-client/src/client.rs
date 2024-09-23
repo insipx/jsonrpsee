@@ -25,29 +25,34 @@
 // DEALINGS IN THE SOFTWARE.
 
 use std::borrow::Cow as StdCow;
-use std::error::Error as StdError;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::transport::{self, Error as TransportError, HttpBackend, HttpTransportClient, HttpTransportClientBuilder};
 use crate::types::{NotificationSer, RequestSer, Response};
+use crate::{HttpRequest, HttpResponse};
 use async_trait::async_trait;
-use hyper::body::HttpBody;
+use hyper::body::Bytes;
 use hyper::http::HeaderMap;
-use hyper::Body;
 use jsonrpsee_core::client::{
-	generate_batch_id_range, BatchResponse, CertificateStore, ClientT, Error, RequestIdManager, StringOrNumberId,
-	Subscription, SubscriptionClientT,
+	generate_batch_id_range, BatchResponse, ClientT, Error, RequestIdManager, StringOrNumberId, Subscription,
+	SubscriptionClientT,
 };
 use jsonrpsee_core::params::BatchRequestBuilder;
-use jsonrpsee_core::traits::{self, IdKind as _, ToRpcParams};
-use jsonrpsee_core::{JsonRawValue, TEN_MB_SIZE_BYTES};
+use jsonrpsee_core::traits::ToRpcParams;
+use jsonrpsee_core::{
+	traits::{self, IdKind as _},
+	BoxError, JsonRawValue, TEN_MB_SIZE_BYTES,
+};
 use jsonrpsee_types::{ErrorObject, InvalidRequestId, ResponseSuccess, TwoPointZero};
 use serde::de::DeserializeOwned;
 use tower::layer::util::Identity;
 use tower::{Layer, Service};
 use tracing::instrument;
+
+#[cfg(feature = "tls")]
+use crate::{CertificateStore, CustomCertStore};
 
 /// HTTP client builder.
 ///
@@ -78,6 +83,7 @@ pub struct HttpClientBuilder<L = Identity, IdKind = StringOrNumberId> {
 	max_response_size: u32,
 	request_timeout: Duration,
 	max_concurrent_requests: usize,
+	#[cfg(feature = "tls")]
 	certificate_store: CertificateStore,
 	id_kind: IdKind,
 	max_log_length: u32,
@@ -105,12 +111,6 @@ impl<L, IdKind> HttpClientBuilder<L, IdKind> {
 		self
 	}
 
-	/// Set max concurrent requests.
-	pub fn max_concurrent_requests(mut self, max: usize) -> Self {
-		self.max_concurrent_requests = max;
-		self
-	}
-
 	/// Force to use the rustls native certificate store.
 	///
 	/// Since multiple certificate stores can be optionally enabled, this option will
@@ -118,24 +118,67 @@ impl<L, IdKind> HttpClientBuilder<L, IdKind> {
 	///
 	/// # Optional
 	///
-	/// This requires the optional `native-tls` feature.
-	#[cfg(feature = "native-tls")]
-	pub fn use_native_rustls(mut self) -> Self {
-		self.certificate_store = CertificateStore::Native;
-		self
-	}
-
-	/// Force to use the rustls webpki certificate store.
+	/// This requires the optional `tls` feature.
 	///
-	/// Since multiple certificate stores can be optionally enabled, this option will
-	/// force the `webpki certificate store` to be used.
+	/// # Example
 	///
-	/// # Optional
+	/// ```no_run
+	/// use jsonrpsee_http_client::{HttpClientBuilder, CustomCertStore};
+	/// use rustls::{
+	///     client::danger::{self, HandshakeSignatureValid, ServerCertVerified},
+	///     pki_types::{CertificateDer, ServerName, UnixTime},
+	///     Error,
+	/// };
 	///
-	/// This requires the optional `webpki-tls` feature.
-	#[cfg(feature = "webpki-tls")]
-	pub fn use_webpki_rustls(mut self) -> Self {
-		self.certificate_store = CertificateStore::WebPki;
+	/// #[derive(Debug)]
+	/// struct NoCertificateVerification;
+	///
+	/// impl rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
+	///     fn verify_server_cert(
+	///         &self,
+	///         _: &CertificateDer<'_>,
+	///         _: &[CertificateDer<'_>],
+	///         _: &ServerName<'_>,
+	///         _: &[u8],
+	///         _: UnixTime,
+	///     ) -> Result<ServerCertVerified, Error> {
+	///         Ok(ServerCertVerified::assertion())
+	///     }
+	///
+	///     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+	///         vec![rustls::SignatureScheme::ECDSA_NISTP256_SHA256]
+	///     }
+	///
+	///     fn verify_tls12_signature(
+	///         &self,
+	///         _: &[u8],
+	///         _: &CertificateDer<'_>,
+	///         _: &rustls::DigitallySignedStruct,
+	///     ) -> Result<rustls::client::danger::HandshakeSignatureValid, Error> {
+	///         Ok(HandshakeSignatureValid::assertion())
+	///     }
+	///
+	///     fn verify_tls13_signature(
+	///         &self,
+	///         _: &[u8],
+	///         _: &CertificateDer<'_>,
+	///         _: &rustls::DigitallySignedStruct,
+	///     ) -> Result<HandshakeSignatureValid, Error> {
+	///         Ok(HandshakeSignatureValid::assertion())
+	///     }
+	/// }
+	///
+	/// let tls_cfg = CustomCertStore::builder()
+	///    .dangerous()
+	///    .with_custom_certificate_verifier(std::sync::Arc::new(NoCertificateVerification))
+	///    .with_no_client_auth();
+	///
+	/// // client builder with disabled certificate verification.
+	/// let client_builder = HttpClientBuilder::new().with_custom_cert_store(tls_cfg);
+	/// ```
+	#[cfg(feature = "tls")]
+	pub fn with_custom_cert_store(mut self, cfg: CustomCertStore) -> Self {
+		self.certificate_store = CertificateStore::Custom(cfg);
 		self
 	}
 
@@ -172,6 +215,7 @@ impl<L, IdKind> HttpClientBuilder<L, IdKind> {
 	/// Set custom tower middleware.
 	pub fn set_http_middleware<T>(self, service_builder: tower::ServiceBuilder<T>) -> HttpClientBuilder<T, IdKind> {
 		HttpClientBuilder {
+			#[cfg(feature = "tls")]
 			certificate_store: self.certificate_store,
 			id_kind: self.id_kind,
 			headers: self.headers,
@@ -189,43 +233,42 @@ impl<L, IdKind> HttpClientBuilder<L, IdKind> {
 impl<B, S, L, IdKind> HttpClientBuilder<L, IdKind>
 where
 	L: Layer<transport::HttpBackend, Service = S>,
-	S: Service<hyper::Request<Body>, Response = hyper::Response<B>, Error = TransportError> + Clone,
-	B: HttpBody + Send + 'static,
+	S: Service<HttpRequest, Response = HttpResponse<B>, Error = TransportError> + Clone,
+	B: http_body::Body<Data = Bytes> + Send + Unpin + 'static,
 	B::Data: Send,
-	B::Error: Into<Box<dyn StdError + Send + Sync>>,
 	IdKind: traits::IdKind,
+	B::Error: Into<BoxError>,
 {
 	/// Build the HTTP client with target to connect to.
 	pub fn build(self, target: impl AsRef<str>) -> Result<HttpClient<S, IdKind>, Error> {
 		let Self {
 			max_request_size,
 			max_response_size,
-			max_concurrent_requests,
 			request_timeout,
+			#[cfg(feature = "tls")]
 			certificate_store,
 			id_kind,
 			headers,
 			max_log_length,
 			service_builder,
 			tcp_no_delay,
+			..
 		} = self;
 
-		let transport = HttpTransportClientBuilder::new()
-			.max_request_size(max_request_size)
-			.max_response_size(max_response_size)
-			.set_headers(headers)
-			.set_tcp_no_delay(tcp_no_delay)
-			.set_max_logging_length(max_log_length)
-			.set_service(service_builder)
-			.set_certification_store(certificate_store)
-			.build(target)
-			.map_err(|e| Error::Transport(e.into()))?;
+		let transport = HttpTransportClientBuilder {
+			max_request_size,
+			max_response_size,
+			headers,
+			max_log_length,
+			tcp_no_delay,
+			service_builder,
+			#[cfg(feature = "tls")]
+			certificate_store,
+		}
+		.build(target)
+		.map_err(|e| Error::Transport(e.into()))?;
 
-		Ok(HttpClient {
-			transport,
-			id_manager: Arc::new(RequestIdManager::new(max_concurrent_requests, id_kind)),
-			request_timeout,
-		})
+		Ok(HttpClient { transport, id_manager: Arc::new(RequestIdManager::new(id_kind)), request_timeout })
 	}
 }
 
@@ -236,6 +279,7 @@ impl Default for HttpClientBuilder<Identity> {
 			max_response_size: TEN_MB_SIZE_BYTES,
 			request_timeout: Duration::from_secs(60),
 			max_concurrent_requests: 256,
+			#[cfg(feature = "tls")]
 			certificate_store: CertificateStore::Native,
 			id_kind: StringOrNumberId::Number,
 			max_log_length: 4096,
@@ -264,9 +308,9 @@ pub struct HttpClient<S = HttpBackend, IdKind = StringOrNumberId> {
 	id_manager: Arc<RequestIdManager<IdKind>>,
 }
 
-impl<S> HttpClient<S> {
+impl HttpClient<HttpBackend> {
 	/// Create a builder for the HttpClient.
-	pub fn builder() -> HttpClientBuilder {
+	pub fn builder() -> HttpClientBuilder<Identity> {
 		HttpClientBuilder::new()
 	}
 }
@@ -274,9 +318,10 @@ impl<S> HttpClient<S> {
 #[async_trait]
 impl<B, S> ClientT for HttpClient<S>
 where
-	S: Service<hyper::Request<Body>, Response = hyper::Response<B>, Error = TransportError> + Send + Sync + Clone,
-	<S as Service<hyper::Request<Body>>>::Future: Send,
-	B: HttpBody<Error = hyper::Error> + Send + 'static,
+	S: Service<HttpRequest, Response = HttpResponse<B>, Error = TransportError> + Send + Sync + Clone,
+	<S as Service<HttpRequest>>::Future: Send,
+	B: http_body::Body<Data = Bytes> + Send + Unpin + 'static,
+	B::Error: Into<BoxError>,
 	B::Data: Send,
 {
 	#[instrument(name = "notification", skip(self, params), level = "trace")]
@@ -303,8 +348,7 @@ where
 		R: DeserializeOwned,
 		Params: ToRpcParams + Send,
 	{
-		let guard = self.id_manager.next_request_id()?;
-		let id = guard.inner();
+		let id = self.id_manager.next_request_id();
 		let params = params.to_rpc_params()?;
 
 		let request = RequestSer::borrowed(&id, &method, params.as_deref());
@@ -341,8 +385,8 @@ where
 		R: DeserializeOwned + fmt::Debug + 'a,
 	{
 		let batch = batch.build()?;
-		let guard = self.id_manager.next_request_id()?;
-		let id_range = generate_batch_id_range(&guard, batch.len() as u64)?;
+		let id = self.id_manager.next_request_id();
+		let id_range = generate_batch_id_range(id, batch.len() as u64)?;
 
 		let mut batch_request = Vec::with_capacity(batch.len());
 		for ((method, params), id) in batch.into_iter().zip(id_range.clone()) {
@@ -407,10 +451,11 @@ where
 #[async_trait]
 impl<B, S> SubscriptionClientT for HttpClient<S>
 where
-	S: Service<hyper::Request<Body>, Response = hyper::Response<B>, Error = TransportError> + Send + Sync + Clone,
-	<S as Service<hyper::Request<Body>>>::Future: Send,
-	B: HttpBody<Error = hyper::Error> + Send + 'static,
+	S: Service<HttpRequest, Response = HttpResponse<B>, Error = TransportError> + Send + Sync + Clone,
+	<S as Service<HttpRequest>>::Future: Send,
+	B: http_body::Body<Data = Bytes> + Send + Unpin + 'static,
 	B::Data: Send,
+	B::Error: Into<BoxError>,
 {
 	/// Send a subscription request to the server. Not implemented for HTTP; will always return
 	/// [`Error::HttpNotImplemented`].

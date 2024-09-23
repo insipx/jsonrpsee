@@ -50,6 +50,7 @@
 //! - **`client-web-transport`** - Enables `websys` transport.
 
 #![warn(missing_docs, missing_debug_implementations, missing_copy_implementations, unreachable_pub)]
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 // Macros useful below, but not to be exposed outside of the crate.
@@ -78,8 +79,11 @@ cfg_client_transport! {
 
 cfg_server! {
 	pub use jsonrpsee_server as server;
-	pub use jsonrpsee_core::server::*;
 	pub use tokio;
+}
+
+cfg_server_core! {
+	pub use jsonrpsee_core::server::*;
 }
 
 cfg_proc_macros! {

@@ -24,7 +24,10 @@
 // IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-extern crate proc_macro;
+//! # jsonrpsee-proc-macros
+
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 use proc_macro::TokenStream;
 use rpc_macro::RpcDescription;
@@ -54,7 +57,7 @@ pub(crate) mod visitor;
 ///   implements the server trait into an `RpcModule`.
 /// - For subscription methods:
 ///   - There will be one additional argument inserted right after `&self`: `subscription_sink: SubscriptionSink`.
-///   It should be used to accept or reject a subscription and send data back to subscribers.
+///     It should be used to accept or reject a subscription and send data back to the subscribers.
 ///   - The return type of the subscription method must implement `IntoSubscriptionCloseResponse`.
 ///
 /// Since this macro can generate up to two traits, both server and client traits will have
@@ -206,6 +209,15 @@ pub(crate) mod visitor;
 ///
 /// - have input parameters or not.
 ///
+/// ### `argument` attribute
+///
+/// `argument` attribute is used to modify a function argument.
+///
+/// **Arguments:**
+///
+/// - `rename`: rename the generated JSON key.
+///
+///
 /// ## Full workflow example
 ///
 /// ```rust
@@ -218,7 +230,7 @@ pub(crate) mod visitor;
 ///
 /// // RPC is put into a separate module to clearly show names of generated entities.
 /// mod rpc_impl {
-///     use jsonrpsee::{proc_macros::rpc};
+///     use jsonrpsee::{proc_macros::rpc, Extensions};
 ///     use jsonrpsee::server::{PendingSubscriptionSink, SubscriptionMessage, IntoSubscriptionCloseResponse, SubscriptionCloseResponse};
 ///     use jsonrpsee::core::{async_trait, RpcResult, SubscriptionResult};
 ///
@@ -243,7 +255,12 @@ pub(crate) mod visitor;
 ///     #[rpc(client, server, namespace = "foo")]
 ///     pub trait MyRpc {
 ///         #[method(name = "foo")]
-///         async fn async_method(&self, param_a: u8, param_b: String) -> RpcResult<u16>;
+///         async fn async_method(
+///             &self,
+///             param_a: u8,
+///             #[argument(rename = "param_c")]
+///             param_b: String
+///         ) -> RpcResult<u16>;
 ///
 ///         #[method(name = "bar")]
 ///         fn sync_method(&self) -> RpcResult<u16>;

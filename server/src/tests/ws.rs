@@ -49,7 +49,7 @@ async fn can_set_the_max_request_body_size() {
 	// Rejects all requests larger than 100 bytes
 	let server = ServerBuilder::default().max_request_body_size(100).build(addr).await.unwrap();
 	let mut module = RpcModule::new(());
-	module.register_method("anything", |_p, _cx| "a".repeat(100)).unwrap();
+	module.register_method("anything", |_p, _cx, _| "a".repeat(100)).unwrap();
 	let addr = server.local_addr().unwrap();
 	let handle = server.start(module);
 
@@ -77,7 +77,7 @@ async fn can_set_the_max_response_body_size() {
 	// Set the max response body size to 100 bytes
 	let server = ServerBuilder::default().max_response_body_size(100).build(addr).await.unwrap();
 	let mut module = RpcModule::new(());
-	module.register_method("anything", |_p, _cx| "a".repeat(101)).unwrap();
+	module.register_method("anything", |_, _, _| "a".repeat(101)).unwrap();
 	let addr = server.local_addr().unwrap();
 	let server_handle = server.start(module);
 
@@ -100,7 +100,7 @@ async fn can_set_the_max_response_size_to_batch() {
 	// Set the max response body size to 100 bytes
 	let server = ServerBuilder::default().max_response_body_size(100).build(addr).await.unwrap();
 	let mut module = RpcModule::new(());
-	module.register_method("anything", |_p, _cx| "a".repeat(51)).unwrap();
+	module.register_method("anything", |_p, _cx, _| "a".repeat(51)).unwrap();
 	let addr = server.local_addr().unwrap();
 	let server_handle = server.start(module);
 
@@ -123,7 +123,7 @@ async fn can_set_max_connections() {
 	// Server that accepts max 2 connections
 	let server = ServerBuilder::default().max_connections(2).build(addr).await.unwrap();
 	let mut module = RpcModule::new(());
-	module.register_method("anything", |_p, _cx| ()).unwrap();
+	module.register_method("anything", |_, _, _| ()).unwrap();
 	let addr = server.local_addr().unwrap();
 
 	let server_handle = server.start(module);
@@ -203,7 +203,7 @@ async fn batch_method_call_works() {
 	let response = client.send_request_text(batch).with_default_timeout().await.unwrap().unwrap();
 	assert_eq!(
 		response,
-		r#"[{"jsonrpc":"2.0","result":"Yawn!","id":123},{"jsonrpc":"2.0","result":"hello","id":1},{"jsonrpc":"2.0","result":"hello","id":2},{"jsonrpc":"2.0","result":"hello","id":3}]"#
+		r#"[{"jsonrpc":"2.0","id":123,"result":"Yawn!"},{"jsonrpc":"2.0","id":1,"result":"hello"},{"jsonrpc":"2.0","id":2,"result":"hello"},{"jsonrpc":"2.0","id":3,"result":"hello"}]"#
 	);
 }
 
@@ -223,7 +223,7 @@ async fn batch_method_call_where_some_calls_fail() {
 
 	assert_eq!(
 		response,
-		r#"[{"jsonrpc":"2.0","result":"hello","id":1},{"jsonrpc":"2.0","error":{"code":-32000,"message":"MyAppError"},"id":2},{"jsonrpc":"2.0","result":79,"id":3}]"#
+		r#"[{"jsonrpc":"2.0","id":1,"result":"hello"},{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"MyAppError"}},{"jsonrpc":"2.0","id":3,"result":79}]"#
 	);
 }
 
@@ -278,7 +278,7 @@ async fn whitespace_is_not_significant() {
 
 	let req = r#" [{"jsonrpc":"2.0","method":"add", "params":[1, 2],"id":1}]"#;
 	let response = client.send_request_text(req).await.unwrap();
-	assert_eq!(response, r#"[{"jsonrpc":"2.0","result":3,"id":1}]"#);
+	assert_eq!(response, r#"[{"jsonrpc":"2.0","id":1,"result":3}]"#);
 
 	// Up to 127 whitespace chars are accepted.
 	let req = format!("{}{}", " ".repeat(127), r#"{"jsonrpc":"2.0","method":"add", "params":[1, 2],"id":1}"#);
@@ -305,7 +305,7 @@ async fn single_method_call_with_params_works() {
 async fn single_method_call_with_faulty_params_returns_err() {
 	let addr = server().await;
 	let mut client = WebSocketTestClient::new(addr).with_default_timeout().await.unwrap().unwrap();
-	let expected = r#"{"jsonrpc":"2.0","error":{"code":-32602,"message":"Invalid params","data":"invalid type: string \"should be a number\", expected u64 at line 1 column 21"},"id":1}"#;
+	let expected = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"Invalid params","data":"invalid type: string \"should be a number\", expected u64 at line 1 column 21"}}"#;
 
 	let req = r#"{"jsonrpc":"2.0","method":"add", "params":["should be a number"],"id":1}"#;
 	let response = client.send_request_text(req).with_default_timeout().await.unwrap().unwrap();
@@ -417,18 +417,21 @@ async fn unknown_field_is_ok() {
 #[tokio::test]
 async fn register_methods_works() {
 	let mut module = RpcModule::new(());
-	assert!(module.register_method("say_hello", |_, _| "lo").is_ok());
-	assert!(module.register_method("say_hello", |_, _| "lo").is_err());
+	assert!(module.register_method("say_hello", |_, _, _| "lo").is_ok());
+	assert!(module.register_method("say_hello", |_, _, _| "lo").is_err());
 	assert!(module
-		.register_subscription("subscribe_hello", "subscribe_hello", "unsubscribe_hello", |_, _, _| async { Ok(()) })
+		.register_subscription("subscribe_hello", "subscribe_hello", "unsubscribe_hello", |_, _, _, _| async { Ok(()) })
 		.is_ok());
 	assert!(module
-		.register_subscription("subscribe_hello_again", "subscribe_hello_again", "unsubscribe_hello", |_, _, _| async {
-			Ok(())
-		})
+		.register_subscription(
+			"subscribe_hello_again",
+			"subscribe_hello_again",
+			"unsubscribe_hello",
+			|_, _, _, _| async { Ok(()) }
+		)
 		.is_err());
 	assert!(
-		module.register_method("subscribe_hello_again", |_, _| "lo").is_ok(),
+		module.register_method("subscribe_hello_again", |_, _, _| "lo").is_ok(),
 		"Failed register_subscription should not have side-effects"
 	);
 }
@@ -437,8 +440,9 @@ async fn register_methods_works() {
 async fn register_same_subscribe_unsubscribe_is_err() {
 	let mut module = RpcModule::new(());
 	assert!(matches!(
-		module
-			.register_subscription("subscribe_hello", "subscribe_hello", "subscribe_hello", |_, _, _| async { Ok(()) }),
+		module.register_subscription("subscribe_hello", "subscribe_hello", "subscribe_hello", |_, _, _, _| async {
+			Ok(())
+		}),
 		Err(RegisterMethodError::SubscriptionNameConflict(_))
 	));
 }
@@ -482,7 +486,7 @@ async fn valid_request_that_fails_to_execute_should_not_close_connection() {
 	// Good request, but causes error.
 	let req = r#"{"jsonrpc":"2.0","method":"call_fail","params":[],"id":123}"#;
 	let response = client.send_request_text(req).with_default_timeout().await.unwrap().unwrap();
-	assert_eq!(response, r#"{"jsonrpc":"2.0","error":{"code":-32000,"message":"MyAppError"},"id":123}"#);
+	assert_eq!(response, r#"{"jsonrpc":"2.0","id":123,"error":{"code":-32000,"message":"MyAppError"}}"#);
 
 	// Connection is still good.
 	let request = r#"{"jsonrpc":"2.0","method":"say_hello","id":333}"#;
@@ -500,12 +504,12 @@ async fn can_register_modules() {
 
 	assert_eq!(mod1.method_names().count(), 0);
 	assert_eq!(mod2.method_names().count(), 0);
-	mod1.register_method("bla", |_, cx| format!("Gave me {cx}")).unwrap();
-	mod1.register_method("bla2", |_, cx| format!("Gave me {cx}")).unwrap();
-	mod2.register_method("yada", |_, cx| format!("Gave me {cx:?}")).unwrap();
+	mod1.register_method("bla", |_, cx, _| format!("Gave me {cx}")).unwrap();
+	mod1.register_method("bla2", |_, cx, _| format!("Gave me {cx}")).unwrap();
+	mod2.register_method("yada", |_, cx, _| format!("Gave me {cx:?}")).unwrap();
 
 	// Won't register, name clashes
-	mod2.register_method("bla", |_, cx| format!("Gave me {cx:?}")).unwrap();
+	mod2.register_method("bla", |_, cx, _| format!("Gave me {cx:?}")).unwrap();
 
 	assert_eq!(mod1.method_names().count(), 2);
 	let err = mod1.merge(mod2).unwrap_err();
@@ -565,7 +569,7 @@ async fn custom_subscription_id_works() {
 	let addr = server.local_addr().unwrap();
 	let mut module = RpcModule::new(());
 	module
-		.register_subscription("subscribe_hello", "subscribe_hello", "unsubscribe_hello", |_, sink, _| async {
+		.register_subscription("subscribe_hello", "subscribe_hello", "unsubscribe_hello", |_, sink, _, _| async {
 			let sink = sink.accept().await.unwrap();
 
 			assert!(matches!(sink.subscription_id(), SubscriptionId::Str(id) if id == "0xdeadbeef"));
@@ -581,9 +585,9 @@ async fn custom_subscription_id_works() {
 	let mut client = WebSocketTestClient::new(addr).with_default_timeout().await.unwrap().unwrap();
 
 	let sub = client.send_request_text(call("subscribe_hello", Vec::<()>::new(), Id::Num(0))).await.unwrap();
-	assert_eq!(&sub, r#"{"jsonrpc":"2.0","result":"0xdeadbeef","id":0}"#);
+	assert_eq!(&sub, r#"{"jsonrpc":"2.0","id":0,"result":"0xdeadbeef"}"#);
 	let unsub = client.send_request_text(call("unsubscribe_hello", vec!["0xdeadbeef"], Id::Num(1))).await.unwrap();
-	assert_eq!(&unsub, r#"{"jsonrpc":"2.0","result":true,"id":1}"#);
+	assert_eq!(&unsub, r#"{"jsonrpc":"2.0","id":1,"result":true}"#);
 }
 
 #[tokio::test]
@@ -598,7 +602,7 @@ async fn disabled_batches() {
 		.unwrap();
 
 	let mut module = RpcModule::new(());
-	module.register_method("should_ok", |_, _ctx| "ok").unwrap();
+	module.register_method("should_ok", |_, _ctx, _| "ok").unwrap();
 	let addr = server.local_addr().unwrap();
 
 	let server_handle = server.start(module);
@@ -628,7 +632,7 @@ async fn batch_limit_works() {
 		.unwrap();
 
 	let mut module = RpcModule::new(());
-	module.register_method("should_ok", |_, _ctx| "ok").unwrap();
+	module.register_method("should_ok", |_, _ctx, _| "ok").unwrap();
 	let addr = server.local_addr().unwrap();
 
 	let server_handle = server.start(module);
@@ -690,7 +694,7 @@ async fn batch_with_mixed_calls() {
 			{"foo": "boo"},
 			{"jsonrpc": "2.0", "method": "foo.get", "params": {"name": "myself"}, "id": "5"}
 		]"#;
-	let res = r#"[{"jsonrpc":"2.0","result":7,"id":"1"},{"jsonrpc":"2.0","error":{"code":-32600,"message":"Invalid request"},"id":null},{"jsonrpc":"2.0","error":{"code":-32601,"message":"Method not found"},"id":"5"}]"#;
+	let res = r#"[{"jsonrpc":"2.0","id":"1","result":7},{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Invalid request"}},{"jsonrpc":"2.0","id":"5","error":{"code":-32601,"message":"Method not found"}}]"#;
 	let response = client.send_request_text(req.to_string()).with_default_timeout().await.unwrap().unwrap();
 	assert_eq!(response, res);
 }
@@ -706,7 +710,7 @@ async fn batch_notif_without_params_works() {
 			{"jsonrpc": "2.0", "method": "add", "params": [1,2,4], "id": "1"},
 			{"jsonrpc": "2.0", "method": "add"}
 		]"#;
-	let res = r#"[{"jsonrpc":"2.0","result":7,"id":"1"}]"#;
+	let res = r#"[{"jsonrpc":"2.0","id":"1","result":7}]"#;
 	let response = client.send_request_text(req.to_string()).with_default_timeout().await.unwrap().unwrap();
 	assert_eq!(response, res);
 }
@@ -732,7 +736,7 @@ async fn ws_server_backpressure_works() {
 			"subscribe_with_backpressure_aggregation",
 			"n",
 			"unsubscribe_with_backpressure_aggregation",
-			move |_, pending, mut backpressure_tx| async move {
+			move |_, pending, mut backpressure_tx, _| async move {
 				let sink = pending.accept().await?;
 				let n = SubscriptionMessage::from_json(&1)?;
 				let bp = SubscriptionMessage::from_json(&2)?;
@@ -880,7 +884,7 @@ async fn server_notify_on_conn_close() {
 	init_logger();
 
 	let metrics = Metrics::default();
-	let addr = ws_server_with_stats(metrics.clone());
+	let addr = ws_server_with_stats(metrics.clone()).await;
 
 	let mut client = WebSocketTestClient::new(addr).with_default_timeout().await.unwrap().unwrap();
 
@@ -915,7 +919,7 @@ async fn server_with_infinite_call(
 	let mut module = RpcModule::new(tx);
 
 	module
-		.register_async_method("infinite_call", |_, mut ctx| async move {
+		.register_async_method("infinite_call", |_, mut ctx, _| async move {
 			let tx = std::sync::Arc::make_mut(&mut ctx);
 			tx.send(()).unwrap();
 			futures_util::future::pending::<()>().await;

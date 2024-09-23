@@ -29,7 +29,7 @@ use std::time::Duration;
 
 use hyper::body::Bytes;
 use jsonrpsee::core::client::ClientT;
-use jsonrpsee::http_client::HttpClientBuilder;
+use jsonrpsee::http_client::HttpClient;
 use jsonrpsee::rpc_params;
 use jsonrpsee::server::{RpcModule, Server};
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
@@ -49,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
 	.layer(
 		TraceLayer::new_for_http()
 			.on_request(
-				|request: &hyper::Request<hyper::Body>, _span: &tracing::Span| tracing::info!(request = ?request, "on_request"),
+				|request: &hyper::Request<_>, _span: &tracing::Span| tracing::info!(request = ?request, "on_request"),
 			)
 			.on_body_chunk(|chunk: &Bytes, latency: Duration, _: &tracing::Span| {
 				tracing::info!(size_bytes = chunk.len(), latency = ?latency, "sending body chunk")
@@ -58,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
 			.on_response(DefaultOnResponse::new().include_headers(true).latency_unit(LatencyUnit::Micros)),
 	);
 
-	let client = HttpClientBuilder::default().set_http_middleware(middleware).build(url)?;
+	let client = HttpClient::builder().set_http_middleware(middleware).build(url)?;
 	let params = rpc_params![1_u64, 2, 3];
 	let response: Result<String, _> = client.request("say_hello", params).await;
 	tracing::info!("r: {:?}", response);
@@ -69,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
 async fn run_server() -> anyhow::Result<SocketAddr> {
 	let server = Server::builder().build("127.0.0.1:0".parse::<SocketAddr>()?).await?;
 	let mut module = RpcModule::new(());
-	module.register_method("say_hello", |_, _| "lo")?;
+	module.register_method("say_hello", |_, _, _| "lo")?;
 
 	let addr = server.local_addr()?;
 	let handle = server.start(module);

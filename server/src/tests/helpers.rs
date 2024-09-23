@@ -1,17 +1,16 @@
-use std::error::Error as StdError;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::{fmt, sync::atomic::AtomicUsize};
 
-use crate::{stop_channel, RpcModule, Server, ServerBuilder, ServerHandle};
+use crate::{serve_with_graceful_shutdown, stop_channel, RpcModule, Server, ServerBuilder, ServerHandle};
 
 use futures_util::FutureExt;
-use hyper::server::conn::AddrStream;
 use jsonrpsee_core::server::Methods;
 use jsonrpsee_core::{DeserializeOwned, RpcResult, StringError};
 use jsonrpsee_test_utils::TimeoutFutureExt;
 use jsonrpsee_types::{error::ErrorCode, ErrorObject, ErrorObjectOwned, Response, ResponseSuccess};
+use tokio::net::TcpListener;
 use tower::Service;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
@@ -41,27 +40,27 @@ pub(crate) async fn server_with_handles() -> (SocketAddr, ServerHandle) {
 	let ctx = TestContext;
 	let mut module = RpcModule::new(ctx);
 	module
-		.register_method("say_hello", |_, _| {
+		.register_method("say_hello", |_, _, _| {
 			tracing::debug!("server respond to hello");
 			"hello"
 		})
 		.unwrap();
 	module
-		.register_method::<Result<u64, ErrorObjectOwned>, _>("add", |params, _| {
+		.register_method::<Result<u64, ErrorObjectOwned>, _>("add", |params, _, _| {
 			let params: Vec<u64> = params.parse()?;
 			let sum: u64 = params.into_iter().sum();
 			Ok(sum)
 		})
 		.unwrap();
 	module
-		.register_method::<Result<String, ErrorObjectOwned>, _>("multiparam", |params, _| {
+		.register_method::<Result<String, ErrorObjectOwned>, _>("multiparam", |params, _, _| {
 			let params: (String, String, Vec<u8>) = params.parse()?;
 			let r = format!("string1={}, string2={}, vec={}", params.0.len(), params.1.len(), params.2.len());
 			Ok(r)
 		})
 		.unwrap();
 	module
-		.register_async_method("say_hello_async", |_, _| {
+		.register_async_method("say_hello_async", |_, _, _| {
 			async move {
 				tracing::debug!("server respond to hello");
 				// Call some async function inside.
@@ -71,16 +70,16 @@ pub(crate) async fn server_with_handles() -> (SocketAddr, ServerHandle) {
 		})
 		.unwrap();
 	module
-		.register_async_method::<Result<u64, ErrorObjectOwned>, _, _>("add_async", |params, _| async move {
+		.register_async_method::<Result<u64, ErrorObjectOwned>, _, _>("add_async", |params, _, _| async move {
 			let params: Vec<u64> = params.parse()?;
 			let sum: u64 = params.into_iter().sum();
 			Ok(sum)
 		})
 		.unwrap();
-	module.register_method("invalid_params", |_params, _| Err::<(), _>(invalid_params())).unwrap();
-	module.register_method("call_fail", |_params, _| Err::<(), _>(MyAppError)).unwrap();
+	module.register_method("invalid_params", |_params, _, _| Err::<(), _>(invalid_params())).unwrap();
+	module.register_method("call_fail", |_params, _, _| Err::<(), _>(MyAppError)).unwrap();
 	module
-		.register_method::<Result<&str, ErrorObjectOwned>, _>("sleep_for", |params, _| {
+		.register_method::<Result<&str, ErrorObjectOwned>, _>("sleep_for", |params, _, _| {
 			let sleep: Vec<u64> = params.parse()?;
 			std::thread::sleep(std::time::Duration::from_millis(sleep[0]));
 			Ok("Yawn!")
@@ -91,7 +90,7 @@ pub(crate) async fn server_with_handles() -> (SocketAddr, ServerHandle) {
 			"subscribe_hello",
 			"subscribe_hello",
 			"unsubscribe_hello",
-			|_, pending, _| async move {
+			|_, pending, _, _| async move {
 				let sink = pending.accept().await?;
 
 				loop {
@@ -102,22 +101,22 @@ pub(crate) async fn server_with_handles() -> (SocketAddr, ServerHandle) {
 		)
 		.unwrap();
 
-	module.register_method("notif", |_, _| "").unwrap();
+	module.register_method("notif", |_, _, _| "").unwrap();
 	module
-		.register_method("should_err", |_, ctx| {
+		.register_method("should_err", |_, ctx, _| {
 			ctx.err()?;
 			RpcResult::Ok("err")
 		})
 		.unwrap();
 
 	module
-		.register_method("should_ok", |_, ctx| {
+		.register_method("should_ok", |_, ctx, _| {
 			ctx.ok()?;
 			RpcResult::Ok("ok")
 		})
 		.unwrap();
 	module
-		.register_async_method("should_ok_async", |_p, ctx| async move {
+		.register_async_method("should_ok_async", |_p, ctx, _| async move {
 			ctx.ok()?;
 			Ok::<_, MyAppError>("ok")
 		})
@@ -137,21 +136,21 @@ pub(crate) async fn server_with_context() -> SocketAddr {
 	let mut rpc_module = RpcModule::new(ctx);
 
 	rpc_module
-		.register_method("should_err", |_p, ctx| {
+		.register_method("should_err", |_p, ctx, _| {
 			ctx.err()?;
 			RpcResult::Ok("err")
 		})
 		.unwrap();
 
 	rpc_module
-		.register_method("should_ok", |_p, ctx| {
+		.register_method("should_ok", |_p, ctx, _| {
 			ctx.ok()?;
 			RpcResult::Ok("ok")
 		})
 		.unwrap();
 
 	rpc_module
-		.register_async_method("should_ok_async", |_p, ctx| async move {
+		.register_async_method("should_ok_async", |_p, ctx, _| async move {
 			ctx.ok()?;
 			// Call some async function inside.
 			Result::<_, MyAppError>::Ok(futures_util::future::ready("ok!").await)
@@ -159,7 +158,7 @@ pub(crate) async fn server_with_context() -> SocketAddr {
 		.unwrap();
 
 	rpc_module
-		.register_async_method("err_async", |_p, ctx| async move {
+		.register_async_method("err_async", |_p, ctx, _| async move {
 			ctx.ok()?;
 			// Async work that returns an error
 			futures_util::future::err::<(), _>(MyAppError).await
@@ -208,56 +207,62 @@ pub(crate) struct Metrics {
 	pub(crate) ws_sessions_closed: Arc<AtomicUsize>,
 }
 
-pub(crate) fn ws_server_with_stats(metrics: Metrics) -> SocketAddr {
-	use hyper::service::{make_service_fn, service_fn};
-
-	let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+pub(crate) async fn ws_server_with_stats(metrics: Metrics) -> SocketAddr {
+	let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await.unwrap();
+	let addr = listener.local_addr().unwrap();
 	let (stop_handle, server_handle) = stop_channel();
-	let stop_handle2 = stop_handle.clone();
+	let metrics = metrics.clone();
 
-	// And a MakeService to handle each connection...
-	let make_service = make_service_fn(move |_conn: &AddrStream| {
-		let stop_handle = stop_handle2.clone();
-		let metrics = metrics.clone();
+	let rpc_svc = Server::builder().max_connections(33).to_service_builder().build(Methods::new(), stop_handle.clone());
 
-		async move {
-			Ok::<_, Box<dyn StdError + Send + Sync>>(service_fn(move |req| {
-				let is_websocket = crate::ws::is_upgrade_request(&req);
-				let metrics = metrics.clone();
-				let stop_handle = stop_handle.clone();
-
-				let mut svc =
-					Server::builder().max_connections(33).to_service_builder().build(Methods::new(), stop_handle);
-
-				if is_websocket {
-					// This should work for each callback.
-					let session_close1 = svc.on_session_closed();
-					let session_close2 = svc.on_session_closed();
-
-					tokio::spawn(async move {
-						metrics.ws_sessions_opened.fetch_add(1, Ordering::SeqCst);
-						tokio::join!(session_close2, session_close1);
-						metrics.ws_sessions_closed.fetch_add(1, Ordering::SeqCst);
-					});
-
-					async move { svc.call(req).await }.boxed()
-				} else {
-					// HTTP.
-					async move { svc.call(req).await }.boxed()
+	tokio::spawn(async move {
+		loop {
+			let sock = tokio::select! {
+				res = listener.accept() => {
+					match res {
+						Ok((stream, _remote_addr)) => stream,
+						Err(e) => {
+							tracing::error!("failed to accept v4 connection: {:?}", e);
+							continue;
+						}
+					}
 				}
-			}))
+				_ = stop_handle.clone().shutdown() => break,
+			};
+
+			let rpc_svc = rpc_svc.clone();
+			let metrics = metrics.clone();
+			let stop_handle = stop_handle.clone();
+
+			tokio::spawn(async move {
+				let rpc_svc = rpc_svc.clone();
+
+				let svc = tower::service_fn(move |req| {
+					let is_websocket = crate::ws::is_upgrade_request(&req);
+					let metrics = metrics.clone();
+					let mut rpc_svc = rpc_svc.clone();
+
+					if is_websocket {
+						// This should work for each callback.
+						let session_close1 = rpc_svc.on_session_closed();
+						let session_close2 = rpc_svc.on_session_closed();
+
+						tokio::spawn(async move {
+							metrics.ws_sessions_opened.fetch_add(1, Ordering::SeqCst);
+							tokio::join!(session_close2, session_close1);
+							metrics.ws_sessions_closed.fetch_add(1, Ordering::SeqCst);
+						});
+					}
+
+					async move { rpc_svc.call(req).await }.boxed()
+				});
+
+				tokio::spawn(serve_with_graceful_shutdown(sock, svc, stop_handle.clone().shutdown()));
+			});
 		}
 	});
 
-	let server = hyper::Server::bind(&addr).serve(make_service);
-
-	let addr = server.local_addr();
-
-	tokio::spawn(async move {
-		let graceful = server.with_graceful_shutdown(async move { stop_handle.shutdown().await });
-		graceful.await.unwrap();
-		drop(server_handle)
-	});
+	tokio::spawn(server_handle.stopped());
 
 	addr
 }

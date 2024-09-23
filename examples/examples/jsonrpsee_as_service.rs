@@ -31,23 +31,22 @@
 //! The typical use-case for this is when one wants to have
 //! access to HTTP related things.
 
-use std::error::Error as StdError;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use futures::FutureExt;
 use hyper::header::AUTHORIZATION;
-use hyper::server::conn::AddrStream;
 use hyper::HeaderMap;
 use jsonrpsee::core::async_trait;
-use jsonrpsee::http_client::HttpClientBuilder;
+use jsonrpsee::http_client::HttpClient;
 use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::server::middleware::rpc::{ResponseFuture, RpcServiceBuilder, RpcServiceT};
-use jsonrpsee::server::{stop_channel, ServerHandle, StopHandle, TowerServiceBuilder};
+use jsonrpsee::server::{serve_with_graceful_shutdown, stop_channel, ServerHandle, StopHandle, TowerServiceBuilder};
 use jsonrpsee::types::{ErrorObject, ErrorObjectOwned, Request};
 use jsonrpsee::ws_client::{HeaderValue, WsClientBuilder};
 use jsonrpsee::{MethodResponse, Methods};
+use tokio::net::TcpListener;
 use tower::Service;
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -111,11 +110,11 @@ async fn main() -> anyhow::Result<()> {
 
 	let metrics = Metrics::default();
 
-	let handle = run_server(metrics.clone());
+	let handle = run_server(metrics.clone()).await?;
 	tokio::spawn(handle.stopped());
 
 	{
-		let client = HttpClientBuilder::default().build("http://127.0.0.1:9944").unwrap();
+		let client = HttpClient::builder().build("http://127.0.0.1:9944").unwrap();
 
 		// Fails because the authorization header is missing.
 		let x = client.trusted_call().await.unwrap_err();
@@ -134,7 +133,7 @@ async fn main() -> anyhow::Result<()> {
 		let mut headers = HeaderMap::new();
 		headers.insert(AUTHORIZATION, HeaderValue::from_static("don't care in this example"));
 
-		let client = HttpClientBuilder::default().set_headers(headers).build("http://127.0.0.1:9944").unwrap();
+		let client = HttpClient::builder().set_headers(headers).build("http://127.0.0.1:9944").unwrap();
 
 		let x = client.trusted_call().await.unwrap();
 		tracing::info!("response: {x}");
@@ -145,10 +144,8 @@ async fn main() -> anyhow::Result<()> {
 	Ok(())
 }
 
-fn run_server(metrics: Metrics) -> ServerHandle {
-	use hyper::service::{make_service_fn, service_fn};
-
-	let addr = SocketAddr::from(([127, 0, 0, 1], 9944));
+async fn run_server(metrics: Metrics) -> anyhow::Result<ServerHandle> {
+	let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 9944))).await?;
 
 	// This state is cloned for every connection
 	// all these types based on Arcs and it should
@@ -181,15 +178,29 @@ fn run_server(metrics: Metrics) -> ServerHandle {
 			.to_service_builder(),
 	};
 
-	// And a MakeService to handle each connection...
-	let make_service = make_service_fn(move |_conn: &AddrStream| {
-		let per_conn = per_conn.clone();
+	tokio::spawn(async move {
+		loop {
+			// The `tokio::select!` macro is used to wait for either of the
+			// listeners to accept a new connection or for the server to be
+			// stopped.
+			let sock = tokio::select! {
+				res = listener.accept() => {
+					match res {
+						Ok((stream, _remote_addr)) => stream,
+						Err(e) => {
+							tracing::error!("failed to accept v4 connection: {:?}", e);
+							continue;
+						}
+					}
+				}
+				_ = per_conn.stop_handle.clone().shutdown() => break,
+			};
+			let per_conn2 = per_conn.clone();
 
-		async move {
-			Ok::<_, Box<dyn StdError + Send + Sync>>(service_fn(move |req| {
+			let svc = tower::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
 				let is_websocket = jsonrpsee::server::ws::is_upgrade_request(&req);
 				let transport_label = if is_websocket { "ws" } else { "http" };
-				let PerConnection { methods, stop_handle, metrics, svc_builder } = per_conn.clone();
+				let PerConnection { methods, stop_handle, metrics, svc_builder } = per_conn2.clone();
 
 				// NOTE, the rpc middleware must be initialized here to be able to created once per connection
 				// with data from the connection such as the headers in this example
@@ -216,7 +227,10 @@ fn run_server(metrics: Metrics) -> ServerHandle {
 					async move {
 						tracing::info!("Opened WebSocket connection");
 						metrics.opened_ws_connections.fetch_add(1, Ordering::Relaxed);
-						svc.call(req).await
+						// https://github.com/rust-lang/rust/issues/102211 the error type can't be inferred
+						// to be `Box<dyn std::error::Error + Send + Sync>` so we need to convert it to a concrete type
+						// as workaround.
+						svc.call(req).await.map_err(|e| anyhow::anyhow!("{:?}", e))
 					}
 					.boxed()
 				} else {
@@ -231,20 +245,18 @@ fn run_server(metrics: Metrics) -> ServerHandle {
 						}
 
 						tracing::info!("Closed HTTP connection");
-						rp
+						// https://github.com/rust-lang/rust/issues/102211 the error type can't be inferred
+						// to be `Box<dyn std::error::Error + Send + Sync>` so we need to convert it to a concrete type
+						// as workaround.
+						rp.map_err(|e| anyhow::anyhow!("{:?}", e))
 					}
 					.boxed()
 				}
-			}))
+			});
+
+			tokio::spawn(serve_with_graceful_shutdown(sock, svc, stop_handle.clone().shutdown()));
 		}
 	});
 
-	let server = hyper::Server::bind(&addr).serve(make_service);
-
-	tokio::spawn(async move {
-		let graceful = server.with_graceful_shutdown(async move { stop_handle.shutdown().await });
-		graceful.await.unwrap()
-	});
-
-	server_handle
+	Ok(server_handle)
 }

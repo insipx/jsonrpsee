@@ -30,6 +30,7 @@ use super::ResponseFuture;
 use std::sync::Arc;
 
 use crate::middleware::rpc::RpcServiceT;
+use crate::ConnectionId;
 use futures_util::future::BoxFuture;
 use jsonrpsee_core::server::{
 	BoundedSubscriptions, MethodCallback, MethodResponse, MethodSink, Methods, SubscriptionState,
@@ -41,7 +42,7 @@ use jsonrpsee_types::{ErrorObject, Request};
 /// JSON-RPC service middleware.
 #[derive(Clone, Debug)]
 pub struct RpcService {
-	conn_id: usize,
+	conn_id: ConnectionId,
 	methods: Methods,
 	max_response_body_size: usize,
 	cfg: RpcServiceCfg,
@@ -63,7 +64,12 @@ pub(crate) enum RpcServiceCfg {
 
 impl RpcService {
 	/// Create a new service.
-	pub(crate) fn new(methods: Methods, max_response_body_size: usize, conn_id: usize, cfg: RpcServiceCfg) -> Self {
+	pub(crate) fn new(
+		methods: Methods,
+		max_response_body_size: usize,
+		conn_id: ConnectionId,
+		cfg: RpcServiceCfg,
+	) -> Self {
 		Self { methods, max_response_body_size, conn_id, cfg }
 	}
 }
@@ -77,13 +83,13 @@ impl<'a> RpcServiceT<'a> for RpcService {
 		let conn_id = self.conn_id;
 		let max_response_body_size = self.max_response_body_size;
 
-		let params = req.params();
-		let name = req.method_name();
-		let id = req.id().clone();
+		let Request { id, method, params, extensions, .. } = req;
+		let params = jsonrpsee_types::Params::new(params.as_ref().map(|p| serde_json::value::RawValue::get(p)));
 
-		match self.methods.method_with_name(name) {
+		match self.methods.method_with_name(&method) {
 			None => {
-				let rp = MethodResponse::error(id, ErrorObject::from(ErrorCode::MethodNotFound));
+				let rp =
+					MethodResponse::error(id, ErrorObject::from(ErrorCode::MethodNotFound)).with_extensions(extensions);
 				ResponseFuture::ready(rp)
 			}
 			Some((_name, method)) => match method {
@@ -91,11 +97,11 @@ impl<'a> RpcServiceT<'a> for RpcService {
 					let params = params.into_owned();
 					let id = id.into_owned();
 
-					let fut = (callback)(id, params, conn_id, max_response_body_size);
+					let fut = (callback)(id, params, conn_id, max_response_body_size, extensions);
 					ResponseFuture::future(fut)
 				}
 				MethodCallback::Sync(callback) => {
-					let rp = (callback)(id, params, max_response_body_size);
+					let rp = (callback)(id, params, max_response_body_size, extensions);
 					ResponseFuture::ready(rp)
 				}
 				MethodCallback::Subscription(callback) => {
@@ -107,7 +113,8 @@ impl<'a> RpcServiceT<'a> for RpcService {
 					} = self.cfg.clone()
 					else {
 						tracing::warn!("Subscriptions not supported");
-						let rp = MethodResponse::error(id, ErrorObject::from(ErrorCode::InternalError));
+						let rp = MethodResponse::error(id, ErrorObject::from(ErrorCode::InternalError))
+							.with_extensions(extensions);
 						return ResponseFuture::ready(rp);
 					};
 
@@ -115,11 +122,12 @@ impl<'a> RpcServiceT<'a> for RpcService {
 						let conn_state =
 							SubscriptionState { conn_id, id_provider: &*id_provider.clone(), subscription_permit: p };
 
-						let fut = callback(id.clone(), params, sink, conn_state);
+						let fut = callback(id.clone(), params, sink, conn_state, extensions);
 						ResponseFuture::future(fut)
 					} else {
 						let max = bounded_subscriptions.max();
-						let rp = MethodResponse::error(id, reject_too_many_subscriptions(max));
+						let rp =
+							MethodResponse::error(id, reject_too_many_subscriptions(max)).with_extensions(extensions);
 						ResponseFuture::ready(rp)
 					}
 				}
@@ -128,11 +136,12 @@ impl<'a> RpcServiceT<'a> for RpcService {
 
 					let RpcServiceCfg::CallsAndSubscriptions { .. } = self.cfg else {
 						tracing::warn!("Subscriptions not supported");
-						let rp = MethodResponse::error(id, ErrorObject::from(ErrorCode::InternalError));
+						let rp = MethodResponse::error(id, ErrorObject::from(ErrorCode::InternalError))
+							.with_extensions(extensions);
 						return ResponseFuture::ready(rp);
 					};
 
-					let rp = callback(id, params, conn_id, max_response_body_size);
+					let rp = callback(id, params, conn_id, max_response_body_size, extensions);
 					ResponseFuture::ready(rp)
 				}
 			},

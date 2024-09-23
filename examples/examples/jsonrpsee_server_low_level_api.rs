@@ -46,17 +46,18 @@ use std::sync::{Arc, Mutex};
 
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use hyper::server::conn::AddrStream;
 use jsonrpsee::core::async_trait;
-use jsonrpsee::http_client::HttpClientBuilder;
+use jsonrpsee::http_client::HttpClient;
 use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::server::middleware::rpc::RpcServiceT;
 use jsonrpsee::server::{
-	http, stop_channel, ws, ConnectionGuard, ConnectionState, RpcServiceBuilder, ServerConfig, ServerHandle, StopHandle,
+	http, serve_with_graceful_shutdown, stop_channel, ws, ConnectionGuard, ConnectionState, RpcServiceBuilder,
+	ServerConfig, ServerHandle, StopHandle,
 };
 use jsonrpsee::types::{ErrorObject, ErrorObjectOwned, Request};
 use jsonrpsee::ws_client::WsClientBuilder;
 use jsonrpsee::{MethodResponse, Methods};
+use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex as AsyncMutex;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -120,7 +121,7 @@ async fn main() -> anyhow::Result<()> {
 	// Make a bunch of WebSocket calls to be blacklisted by server.
 	{
 		let mut i = 0;
-		let handle = run_server();
+		let handle = run_server().await?;
 
 		let client = WsClientBuilder::default().build("ws://127.0.0.1:9944").await.unwrap();
 		while client.is_connected() {
@@ -141,9 +142,9 @@ async fn main() -> anyhow::Result<()> {
 	// Make a bunch of HTTP calls to be blacklisted by server.
 	{
 		let mut i = 0;
-		let handle = run_server();
+		let handle = run_server().await?;
 
-		let client = HttpClientBuilder::default().build("http://127.0.0.1:9944").unwrap();
+		let client = HttpClient::builder().build("http://127.0.0.1:9944").unwrap();
 		while client.say_hello().await.is_ok() {
 			i += 1;
 		}
@@ -156,11 +157,9 @@ async fn main() -> anyhow::Result<()> {
 	Ok(())
 }
 
-fn run_server() -> ServerHandle {
-	use hyper::service::{make_service_fn, service_fn};
-
+async fn run_server() -> anyhow::Result<ServerHandle> {
 	// Construct our SocketAddr to listen on...
-	let addr = SocketAddr::from(([127, 0, 0, 1], 9944));
+	let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 9944))).await?;
 
 	// Each RPC call/connection get its own `stop_handle`
 	// to able to determine whether the server has been stopped or not.
@@ -201,13 +200,29 @@ fn run_server() -> ServerHandle {
 		global_http_rate_limit: Default::default(),
 	};
 
-	// And a MakeService to handle each connection...
-	let make_service = make_service_fn(move |conn: &AddrStream| {
-		let per_conn = per_conn.clone();
-		let remote_addr = conn.remote_addr();
+	tokio::spawn(async move {
+		loop {
+			// The `tokio::select!` macro is used to wait for either of the
+			// listeners to accept a new connection or for the server to be
+			// stopped.
+			let (sock, remote_addr) = tokio::select! {
+				res = listener.accept() => {
+					match res {
+						Ok(sock) => sock,
+						Err(e) => {
+							tracing::error!("failed to accept v4 connection: {:?}", e);
+							continue;
+						}
+					}
+				}
+				_ = per_conn.stop_handle.clone().shutdown() => break,
+			};
+			let per_conn = per_conn.clone();
 
-		async move {
-			Ok::<_, Infallible>(service_fn(move |req| {
+			// Create a service handler.
+			let stop_handle2 = per_conn.stop_handle.clone();
+			let per_conn = per_conn.clone();
+			let svc = tower::service_fn(move |req| {
 				let PerConnection {
 					methods,
 					stop_handle,
@@ -287,16 +302,12 @@ fn run_server() -> ServerHandle {
 				} else {
 					async { Ok(http::response::denied()) }.boxed()
 				}
-			}))
+			});
+
+			// Upgrade the connection to a HTTP service.
+			tokio::spawn(serve_with_graceful_shutdown(sock, svc, stop_handle2.shutdown()));
 		}
 	});
 
-	let server = hyper::Server::bind(&addr).serve(make_service);
-
-	tokio::spawn(async move {
-		let graceful = server.with_graceful_shutdown(async move { stop_handle.shutdown().await });
-		graceful.await.unwrap()
-	});
-
-	server_handle
+	Ok(server_handle)
 }

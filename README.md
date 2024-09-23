@@ -6,7 +6,7 @@
 ![MIT](https://img.shields.io/crates/l/jsonrpsee.svg)
 [![CI](https://github.com/paritytech/jsonrpsee/actions/workflows/ci.yml/badge.svg)](https://github.com/paritytech/jsonrpsee/actions/workflows/ci.yml)
 [![Benchmarks](https://github.com/paritytech/jsonrpsee/actions/workflows/benchmarks_gitlab.yml/badge.svg)](https://github.com/paritytech/jsonrpsee/actions/workflows/benchmarks_gitlab.yml)
-[![dependency status](https://deps.rs/crate/jsonrpsee/0.21.0/status.svg)](https://deps.rs/crate/jsonrpsee/0.21.0)
+[![dependency status](https://deps.rs/crate/jsonrpsee/0.24.4/status.svg)](https://deps.rs/crate/jsonrpsee/0.24.4)
 
 JSON-RPC library designed for async/await in Rust.
 
@@ -33,6 +33,7 @@ Designed to be the successor to [ParityTech's JSONRPC crate](https://github.com/
 - [HTTP proxy middleware](./examples/examples/http_proxy_middleware.rs)
 - [jsonrpsee as service](./examples/examples/jsonrpsee_as_service.rs)
 - [low level API](./examples/examples/jsonrpsee_server_low_level_api.rs)
+- [Websocket served over dual-stack (v4/v6) sockets](./examples/examples/ws_dual_stack.rs)
 
 See [this directory](./examples/examples) for more examples
 
@@ -45,14 +46,15 @@ See [our tracking milestone](https://github.com/paritytech/jsonrpsee/milestone/2
 If your project uses `jsonrpsee` we would like to know. Please open a pull request and add your project to the list below:
 - [parity bridges common](https://github.com/paritytech/parity-bridges-common)
 - [remote externalities](https://github.com/paritytech/substrate/tree/master/utils/frame/remote-externalities)
-- [substrate](https://github.com/paritytech/substrate)
+- [polkadot-sdk](https://github.com/paritytech/polkadot-sdk)
 - [substrate-api-client](https://github.com/scs/substrate-api-client)
 - [subwasm](https://github.com/chevdor/subwasm)
 - [subway](https://github.com/AcalaNetwork/subway)
 - [subxt](https://github.com/paritytech/subxt)
-- [Trin](https://github.com/ethereum/trin)   
+- [Trin](https://github.com/ethereum/trin)
 - [Uptest](https://github.com/uptest-sc/uptest)
 - [zkSync Era](https://github.com/matter-labs/zksync-era)
+- [Forest](https://github.com/ChainSafe/forest)
 
 ## Benchmarks
 

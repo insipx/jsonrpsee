@@ -25,9 +25,8 @@
 // DEALINGS IN THE SOFTWARE.
 
 use crate::types::error::{ErrorCode, ErrorObject};
-
 use crate::HttpClientBuilder;
-use jsonrpsee_core::client::{BatchResponse, ClientT, IdKind};
+use jsonrpsee_core::client::{BatchResponse, ClientT, StringOrNumberId};
 use jsonrpsee_core::params::BatchRequestBuilder;
 use jsonrpsee_core::ClientError;
 use jsonrpsee_core::{rpc_params, DeserializeOwned};
@@ -58,7 +57,7 @@ async fn method_call_with_wrong_id_kind() {
 	let server_addr =
 		http_server_with_hardcoded_response(ok_response(exp.into(), Id::Num(0))).with_default_timeout().await.unwrap();
 	let uri = format!("http://{server_addr}");
-	let client = HttpClientBuilder::default().id_format(IdKind::String).build(&uri).unwrap();
+	let client = HttpClientBuilder::default().id_format(StringOrNumberId::String).build(&uri).unwrap();
 	let res: Result<String, ClientError> = client.request("o", rpc_params![]).with_default_timeout().await.unwrap();
 	assert!(matches!(res, Err(ClientError::InvalidRequestId(_))));
 }
@@ -71,7 +70,7 @@ async fn method_call_with_id_str() {
 		.await
 		.unwrap();
 	let uri = format!("http://{server_addr}");
-	let client = HttpClientBuilder::default().id_format(IdKind::String).build(&uri).unwrap();
+	let client = HttpClientBuilder::default().id_format(StringOrNumberId::String).build(&uri).unwrap();
 	let response: String = client.request("o", rpc_params![]).with_default_timeout().await.unwrap().unwrap();
 	assert_eq!(&response, exp);
 }
