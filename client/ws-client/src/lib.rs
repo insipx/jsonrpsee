@@ -83,7 +83,7 @@ use jsonrpsee_client_transport::ws::CertificateStore;
 ///
 /// ```
 #[derive(Clone, Debug)]
-pub struct WsClientBuilder<IdKind = StringOrNumberId> {
+pub struct WsClientBuilder<IdKind> {
 	#[cfg(feature = "tls")]
 	certificate_store: CertificateStore,
 	max_request_size: u32,
@@ -123,7 +123,7 @@ impl Default for WsClientBuilder<StringOrNumberId> {
 
 impl<IdKind> WsClientBuilder<IdKind> {
 	/// Create a new WebSocket client builder.
-	pub fn new() -> WsClientBuilder {
+	pub fn new() -> WsClientBuilder<StringOrNumberId> {
 		WsClientBuilder::default()
 	}
 
