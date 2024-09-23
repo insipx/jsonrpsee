@@ -83,7 +83,7 @@ use jsonrpsee_client_transport::ws::CertificateStore;
 ///
 /// ```
 #[derive(Clone, Debug)]
-pub struct WsClientBuilder<IdKind> {
+pub struct WsClientBuilder<IdKind = StringOrNumberId> {
 	#[cfg(feature = "tls")]
 	certificate_store: CertificateStore,
 	max_request_size: u32,
@@ -100,7 +100,7 @@ pub struct WsClientBuilder<IdKind> {
 	tcp_no_delay: bool,
 }
 
-impl Default for WsClientBuilder<StringOrNumberId> {
+impl<IdKind: Default> Default for WsClientBuilder<IdKind> {
 	fn default() -> Self {
 		Self {
 			#[cfg(feature = "tls")]
@@ -114,7 +114,7 @@ impl Default for WsClientBuilder<StringOrNumberId> {
 			max_concurrent_requests: 256,
 			max_buffer_capacity_per_subscription: 1024,
 			max_redirections: 5,
-			id_kind: StringOrNumberId::default(),
+			id_kind: IdKind::default(),
 			max_log_length: 4096,
 			tcp_no_delay: true,
 		}
